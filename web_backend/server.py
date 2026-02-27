@@ -31,7 +31,6 @@ try:
 except Exception:
     DB_AVAILABLE = False
 
-
 app = FastAPI(title="Connect4 Web")
 
 app.add_middleware(
@@ -55,7 +54,6 @@ robot_depth: int = 3
 match_score = {RED: 0, YELLOW: 0}
 _counted_games: Dict[int, str] = {}
 
-
 def _update_match_score_if_needed():
     g = game
     if g.cursor <= 0:
@@ -74,7 +72,6 @@ def _update_match_score_if_needed():
         _counted_games[g.game_index] = g.winner or ""
         if g.winner in (RED, YELLOW):
             match_score[g.winner] += 1
-
 
 def _status_text() -> str:
     g = game
@@ -97,14 +94,13 @@ def _status_text() -> str:
     txt += " | " + score_txt
     return txt
 
-
 def serialize_state() -> Dict[str, Any]:
     _update_match_score_if_needed()
     g = game
     return {
         "rows": g.rows,
         "cols": g.cols,
-        "board": [row[:] for row in g.board],  # IMPORTANT: vrai tableau JSON
+        "board": [row[:] for row in g.board],
         "current_turn": g.current_turn,
         "finished": g.finished,
         "winner": g.winner,
@@ -119,8 +115,12 @@ def serialize_state() -> Dict[str, Any]:
         "robot_depth": robot_depth,
         "match_score": {"R": match_score[RED], "Y": match_score[YELLOW]},
         "status_text": _status_text(),
+        # ✅ AJOUT POUR LA SIDEBAR
+        "moves": [
+            {"ply": i, "col": int(m.col), "row": int(m.row), "color": m.color}
+            for i, m in enumerate(g.moves[: g.cursor], start=1)
+        ],
     }
-
 
 def _save_game_to_db_if_possible():
     if not DB_AVAILABLE:
@@ -139,7 +139,6 @@ def _save_game_to_db_if_possible():
         moves_payload.append({"ply": i, "col": int(m.col), "row": int(m.row), "color": m.color})
 
     try:
-        # adapte à ta signature db.py
         db.upsert_game_progress(
             source_filename=source,
             seq=seq,
@@ -153,9 +152,7 @@ def _save_game_to_db_if_possible():
             confiance=1,
         )
     except Exception:
-        # on évite de casser l'app web si DB KO
         pass
-
 
 # ----------------
 # Pydantic I/O
@@ -165,18 +162,14 @@ class SetIn(BaseModel):
     robot_algo: Optional[str] = None
     robot_depth: Optional[int] = None
 
-
 class MoveIn(BaseModel):
     col: int
-
 
 class CursorIn(BaseModel):
     cursor: int
 
-
 class LoadSnapIn(BaseModel):
     snapshot: Dict[str, Any]
-
 
 class ConfigIn(BaseModel):
     rows: int
@@ -186,7 +179,6 @@ class ConfigIn(BaseModel):
     margin: int
     drop_delay_ms: int
 
-
 # ----------------
 # Routes API
 # ----------------
@@ -194,22 +186,18 @@ class ConfigIn(BaseModel):
 def api_state():
     return serialize_state()
 
-
 @app.post("/api/new")
 def api_new():
     global game, cfg
     cfg = ensure_config()
-    # nouvelle partie
     game = Connect4(cfg["rows"], cfg["cols"], cfg["starting_color"])
     _save_game_to_db_if_possible()
     return serialize_state()
-
 
 @app.post("/api/pause")
 def api_pause():
     game.paused = not game.paused
     return serialize_state()
-
 
 @app.post("/api/set")
 def api_set(payload: SetIn):
@@ -234,18 +222,14 @@ def api_set(payload: SetIn):
 
     return serialize_state()
 
-
 @app.post("/api/move")
 def api_move(payload: MoveIn):
     col = int(payload.col)
-
     ok = game.drop_in_column(col)
     if not ok:
         raise HTTPException(400, "invalid move")
-
     _save_game_to_db_if_possible()
     return serialize_state()
-
 
 @app.post("/api/undo")
 def api_undo():
@@ -253,20 +237,17 @@ def api_undo():
     _save_game_to_db_if_possible()
     return serialize_state()
 
-
 @app.post("/api/redo")
 def api_redo():
     game.redo()
     _save_game_to_db_if_possible()
     return serialize_state()
 
-
 @app.post("/api/cursor")
 def api_cursor(payload: CursorIn):
     game.apply_to_cursor(int(payload.cursor))
     _save_game_to_db_if_possible()
     return serialize_state()
-
 
 @app.post("/api/step_ai")
 def api_step_ai():
@@ -287,11 +268,11 @@ def api_step_ai():
         _save_game_to_db_if_possible()
         return serialize_state()
 
-    # MiniMax
-    # MiniMax sur 9x9 peut être très lent si depth trop haut
+    # MiniMax (limité pour perf 9x9)
     depth = max(1, min(int(robot_depth), 4))
-    if game.rows * game.cols >= 81:   # 9x9
-        depth = min(depth, 3)         # limite auto pour garder fluide
+    if game.rows * game.cols >= 81:
+        depth = min(depth, 3)
+
     scores: List[Optional[int]] = [None] * game.cols
     tmp = [row[:] for row in game.board]
     for c in range(game.cols):
@@ -305,28 +286,23 @@ def api_step_ai():
     _save_game_to_db_if_possible()
     return serialize_state()
 
-
 @app.get("/api/save")
 def api_save():
     snap = game.to_snapshot()
     return json.loads(json.dumps(snap, default=lambda o: o.__dict__))
 
-
 @app.post("/api/load")
 def api_load(payload: LoadSnapIn):
     global game
     from core import GameSnapshot
-
     snap = GameSnapshot(**payload.snapshot)
     game = Connect4.from_snapshot(snap)
     _save_game_to_db_if_possible()
     return serialize_state()
 
-
 @app.get("/api/config")
 def api_get_config():
     return ensure_config()
-
 
 @app.post("/api/config")
 def api_set_config(payload: ConfigIn):
@@ -347,7 +323,6 @@ def api_set_config(payload: ConfigIn):
     _save_game_to_db_if_possible()
     return {"ok": True, "config": cfg_norm}
 
-
 @app.get("/api/db/list")
 def api_db_list(limit: int = 500):
     if not DB_AVAILABLE:
@@ -367,17 +342,16 @@ def api_db_list(limit: int = 500):
 
     return {"games": out}
 
-
 @app.post("/api/db/load/{game_id}")
 def api_db_load(game_id: int):
-    global game  # ✅ doit être AVANT tout usage de game
+    global game
 
     if not DB_AVAILABLE:
         raise HTTPException(400, "DB non disponible")
 
     data = db.get_game_for_app(int(game_id))
 
-    current_mode = game.mode  # OK (global déjà déclaré)
+    current_mode = game.mode
 
     rows = int(data["rows"])
     cols = int(data["cols"])
@@ -386,7 +360,6 @@ def api_db_load(game_id: int):
     game = Connect4(rows, cols, start)
     game.mode = current_mode
 
-    # reconstruire moves
     from core import Move
     import time as _t
 
@@ -400,14 +373,6 @@ def api_db_load(game_id: int):
     _save_game_to_db_if_possible()
     return serialize_state()
 
-
-# ----------------
-# Static front
-# ----------------
-WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
-
-import os
-
 @app.get("/api/db/ping")
 def api_db_ping():
     url = os.getenv("DATABASE_URL")
@@ -416,6 +381,9 @@ def api_db_ping():
         "has_database_url": bool(url),
         "database_url_prefix": (url[:30] + "...") if url else None,
     }
-    
-app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
 
+# ----------------
+# Static front
+# ----------------
+WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
