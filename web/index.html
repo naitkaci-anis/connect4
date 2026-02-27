@@ -4,8 +4,8 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Puissance 4</title>
-    <link rel="stylesheet" href="styles.css" />
+    <title>Puissance 4 — Web</title>
+    <link rel="stylesheet" href="./styles.css" />
 </head>
 
 <body>
@@ -41,26 +41,41 @@
                 <button class="btn" id="btnPause">Pause</button>
                 <button class="btn" id="btnPrev">← Précédent</button>
                 <button class="btn" id="btnNext">→ Suivant</button>
-                <button class="btn" id="btnSave">Sauvegarder</button>
-                <button class="btn" id="btnLoad">Charger</button>
-                <button class="btn" id="btnLoadDb">Charger DB</button>
+
+                <!-- ✅ On supprime Sauvegarder + Charger -->
+                <!-- ✅ On garde DB mais on renomme -->
+                <button class="btn" id="btnLoadDb">Parties précédentes</button>
+
                 <button class="btn" id="btnSettings">⚙ Réglages</button>
             </div>
         </header>
 
         <!-- Main area -->
         <main class="main">
-            <div class="board-area">
-                <div class="colnums" id="colnums"></div>
-                <div class="board" id="board"></div>
+            <div class="layout">
+                <div class="board-wrap">
+                    <div class="colnums" id="colnums"></div>
+
+                    <!-- ghost piece -->
+                    <div class="ghost" id="ghost"></div>
+
+                    <!-- board -->
+                    <div class="board" id="board"></div>
+                </div>
+
+                <aside class="sidebar">
+                    <div class="panel">
+                        <div class="panel-title">Historique des coups</div>
+                        <div class="panel-sub" id="movesMeta">0 coup</div>
+                        <ol class="moves" id="movesList"></ol>
+                    </div>
+                </aside>
             </div>
         </main>
 
         <!-- Bottom status bar -->
         <footer class="statusbar">
-            <div id="statusLeft" class="status-left">
-                [Partie #1 | mode 2] À jouer : <span class="redTxt">Rouge</span> | Robot: <span id="robotTxt">Random</span> | coups: <span id="movesTxt">0/0</span> | Score: Rouge <span id="scoreR">0</span> - <span id="scoreY">0</span> Jaune
-            </div>
+            <div id="statusLeft" class="status-left"></div>
 
             <div class="status-right">
                 <div class="progress">
@@ -68,10 +83,22 @@
                 </div>
                 <div id="progressTxt" class="progress-txt">0/0</div>
             </div>
+        </footer>
     </div>
 
-    <script src="app.js"></script>
-</body>
+    <!-- Winner modal -->
+    <div class="modal" id="winnerModal" aria-hidden="true">
+        <div class="modal-card">
+            <div class="modal-title" id="winnerTitle">Fin de partie</div>
+            <div class="modal-text" id="winnerText"></div>
+            <div class="modal-actions">
+                <button class="btn" id="btnCloseWinner">OK</button>
+                <button class="btn btn-primary" id="btnNewFromWinner">Nouvelle partie</button>
+            </div>
+        </div>
+    </div>
 
+    <script src="./app.js"></script>
+</body>
 
 </html>
