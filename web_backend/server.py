@@ -405,4 +405,16 @@ def api_db_load(game_id: int):
 # Static front
 # ----------------
 WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
+
+import os
+
+@app.get("/api/db/ping")
+def api_db_ping():
+    url = os.getenv("DATABASE_URL")
+    return {
+        "db_available": DB_AVAILABLE,
+        "has_database_url": bool(url),
+        "database_url_prefix": (url[:30] + "...") if url else None,
+    }
+    
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
