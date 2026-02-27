@@ -418,3 +418,4 @@ def api_db_ping():
     }
     
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+
