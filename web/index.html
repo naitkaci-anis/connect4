@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="fr">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Puissance 4 — Web (UI Tkinter)</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+    <div class="app">
+        <!-- Top bar -->
+        <header class="topbar">
+            <div class="controls-left">
+                <div class="control">
+                    <label>Mode :</label>
+                    <select id="mode">
+            <option value="2">2 joueurs (human vs human)</option>
+            <option value="1">1 joueur (human vs robot)</option>
+            <option value="0">0 joueur (robot vs robot)</option>
+          </select>
+                </div>
+
+                <div class="control">
+                    <label>Robot :</label>
+                    <select id="robot">
+            <option value="random">Random</option>
+            <option value="minimax">MiniMax</option>
+          </select>
+                </div>
+
+                <div class="control">
+                    <label>Profondeur :</label>
+                    <input id="depth" type="number" min="1" max="8" value="3" />
+                </div>
+            </div>
+
+            <div class="controls-right">
+                <button class="btn" id="btnNew">Nouveau</button>
+                <button class="btn" id="btnPause">Pause</button>
+                <button class="btn" id="btnPrev">← Précédent</button>
+                <button class="btn" id="btnNext">→ Suivant</button>
+                <button class="btn" id="btnSave">Sauvegarder</button>
+                <button class="btn" id="btnLoad">Charger</button>
+                <button class="btn" id="btnLoadDb">Charger DB</button>
+                <button class="btn" id="btnSettings">⚙ Réglages</button>
+            </div>
+        </header>
+
+        <!-- Main area -->
+        <main class="main">
+            <div class="board-area">
+                <div class="colnums" id="colnums"></div>
+                <div class="board" id="board"></div>
+            </div>
+        </main>
+
+        <!-- Bottom status bar -->
+        <footer class="statusbar">
+            <div id="statusLeft" class="status-left">
+                [Partie #1 | mode 2] À jouer : <span class="redTxt">Rouge</span> | Robot: <span id="robotTxt">Random</span> | coups: <span id="movesTxt">0/0</span> | Score: Rouge <span id="scoreR">0</span> - <span id="scoreY">0</span> Jaune
+            </div>
+
+            <div class="status-right">
+                <div class="progress">
+                    <div class="progress-fill" id="progressFill" style="width:0%"></div>
+                </div>
+                <div id="progressTxt" class="progress-txt">0/0</div>
+            </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

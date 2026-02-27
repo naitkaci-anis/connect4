@@ -1,0 +1,226 @@
+:root {
+    --bg: #071227;
+    --bg2: #051021;
+    --top: #0a2f8f;
+    --topBtn: #1e63ff;
+    --panel: #0b4aa8;
+    /* plateau bleu */
+    --panelEdge: #0a3f90;
+    --text: #eaf0ff;
+    --muted: #b8c7ee;
+    --cell: 64px;
+    --gap: 12px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    background: radial-gradient(1200px 700px at 30% 10%, rgba(35, 99, 235, .35), transparent 55%), linear-gradient(180deg, var(--bg), var(--bg2));
+    color: var(--text);
+}
+
+.app {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+
+/* Top bar (comme Tkinter) */
+
+.topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 14px;
+    background: rgba(5, 12, 24, .75);
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+
+.controls-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-weight: 700;
+}
+
+select,
+input {
+    height: 34px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, .20);
+    background: rgba(255, 255, 255, .08);
+    color: var(--text);
+    padding: 0 10px;
+    outline: none;
+}
+
+.controls-right {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.btn {
+    background: rgba(30, 99, 255, .85);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 2px;
+    padding: 10px 14px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.btn:hover {
+    filter: brightness(1.05);
+}
+
+
+/* Main */
+
+.main {
+    flex: 1;
+    padding: 18px 18px 0;
+}
+
+.board-area {
+    width: fit-content;
+}
+
+
+/* 1..9 numbers */
+
+.colnums {
+    display: grid;
+    grid-template-columns: repeat(9, var(--cell));
+    gap: var(--gap);
+    padding: 6px 6px 10px;
+    color: var(--text);
+    font-weight: 900;
+    letter-spacing: .2px;
+}
+
+.colnums div {
+    width: var(--cell);
+    text-align: center;
+    opacity: .95;
+}
+
+
+/* Board */
+
+.board {
+    display: grid;
+    grid-template-columns: repeat(9, var(--cell));
+    grid-template-rows: repeat(9, var(--cell));
+    gap: var(--gap);
+    padding: 16px;
+    background: linear-gradient(180deg, var(--panel), var(--panelEdge));
+    border-radius: 2px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+}
+
+.cell {
+    width: var(--cell);
+    height: var(--cell);
+    border-radius: 999px;
+    background: #ffffff;
+    box-shadow: inset 0 0 0 2px rgba(0, 0, 0, .35), 0 2px 0 rgba(0, 0, 0, .25);
+    cursor: pointer;
+}
+
+.cell.red {
+    background: radial-gradient(circle at 30% 30%, #ff6b6b, #b21a1a);
+}
+
+.cell.yellow {
+    background: radial-gradient(circle at 30% 30%, #ffe46b, #b58a00);
+}
+
+
+/* Bottom status bar */
+
+.statusbar {
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 0 14px;
+    background: rgba(5, 12, 24, .85);
+    border-top: 1px solid rgba(255, 255, 255, .10);
+    font-weight: 800;
+    color: var(--muted);
+}
+
+.redTxt {
+    color: #ff6b6b;
+    font-weight: 900;
+}
+
+.status-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.progress {
+    width: 320px;
+    height: 10px;
+    background: rgba(255, 255, 255, .12);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: rgba(30, 99, 255, .95);
+}
+
+.progress-txt {
+    min-width: 44px;
+    text-align: right;
+    color: var(--text);
+}
+
+
+/* responsive */
+
+@media (max-width: 900px) {
+     :root {
+        --cell: 44px;
+        --gap: 8px;
+    }
+    .progress {
+        width: 180px;
+    }
+}
+
+
+/* Fix dropdown options visibility (Chrome/Windows) */
+
+select {
+    color: var(--text);
+    background: rgba(255, 255, 255, .08);
+}
+
+select option {
+    background: #ffffff;
+    /* fond clair */
+    color: #0b1220;
+    /* texte foncé */
+}
