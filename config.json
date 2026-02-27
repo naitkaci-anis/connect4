@@ -1,0 +1,8 @@
+{
+  "rows": 9,
+  "cols": 9,
+  "starting_color": "R",
+  "cell_size": 64,
+  "margin": 18,
+  "drop_delay_ms": 250
+}
