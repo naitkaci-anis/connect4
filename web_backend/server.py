@@ -760,3 +760,4 @@ def api_db_ping():
 # ----------------
 WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+
