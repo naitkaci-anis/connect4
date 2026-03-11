@@ -77,6 +77,7 @@ const onlineConsoleEl = document.getElementById("onlineConsole");
 // state
 let state = null;
 let autoplayRunning = false;
+let stepAiInFlight = false;
 let hoveredCol = null;
 
 // online state
@@ -484,11 +485,12 @@ async function refresh() {
             state = await api("/api/state");
 
             if (modeEl) modeEl.value = String(state.mode);
-            if (robotEl) robotEl.value = state.robot_algo.toLowerCase() === "minimax" ? "minimax" : "random";
+            if (robotEl) {
+                robotEl.value = state.robot_algo.toLowerCase() === "minimax" ? "minimax" : "random";
+            }
             if (depthEl) depthEl.value = String(state.robot_depth);
 
             render();
-            maybeAutoplay();
         }
     } catch (e) {
         console.error("refresh failed:", e);
@@ -507,6 +509,7 @@ async function onColClick(col) {
 
         await api("/api/move", "POST", { col });
         await refresh();
+        await maybeAutoplay();
     } catch (e) {
         console.log(e.message);
     }
@@ -516,39 +519,59 @@ function stopAutoplay() {
     autoplayRunning = false;
 }
 
-function maybeAutoplay() {
-    stopAutoplay();
+async function stepAIOnce() {
+    if (stepAiInFlight) return false;
+    stepAiInFlight = true;
+
+    try {
+        await api("/api/step_ai", "POST");
+        return true;
+    } catch (e) {
+        console.error("step_ai failed:", e);
+        return false;
+    } finally {
+        stepAiInFlight = false;
+    }
+}
+
+async function maybeAutoplay() {
+    if (autoplayRunning) return;
     if (!state) return;
     if (state.paused || state.finished) return;
     if (onlineMode) return;
 
-    const mode = state.mode;
-    const turn = state.current_turn;
-    const needAI = mode === 0 || (mode === 1 && turn === "Y");
+    const needAI = state.mode === 0 || (state.mode === 1 && state.current_turn === "Y");
     if (!needAI) return;
 
     autoplayRunning = true;
 
-    (async function loop() {
+    try {
         while (autoplayRunning) {
-            try {
-                await api("/api/step_ai", "POST");
-                await refresh();
-            } catch (e) {
-                autoplayRunning = false;
-                break;
-            }
+            if (!state || state.paused || state.finished || onlineMode) break;
+
+            const stillNeedAI =
+                state.mode === 0 || (state.mode === 1 && state.current_turn === "Y");
+
+            if (!stillNeedAI) break;
+
+            const ok = await stepAIOnce();
+            if (!ok) break;
+
+            await refresh();
+
+            if (!state || state.paused || state.finished || onlineMode) break;
 
             await new Promise((r) => setTimeout(r, 350));
-            if (!state || state.paused || state.finished) {
-                autoplayRunning = false;
-            }
         }
-    })();
+    } finally {
+        autoplayRunning = false;
+    }
 }
 
 // events
 on(btnNew, "click", async() => {
+    stopAutoplay();
+
     onlineMode = false;
     onlineRoomId = null;
     onlinePlayerToken = null;
@@ -565,30 +588,37 @@ on(btnNew, "click", async() => {
     await api("/api/new", "POST");
     hoveredCol = null;
     await refresh();
+    await maybeAutoplay();
 });
 
 on(btnPause, "click", async() => {
     if (onlineMode) return;
     await api("/api/pause", "POST");
     await refresh();
+    await maybeAutoplay();
 });
 
 on(btnPrev, "click", async() => {
     if (onlineMode) return;
+    stopAutoplay();
     await api("/api/undo", "POST");
     await refresh();
+    await maybeAutoplay();
 });
 
 on(btnNext, "click", async() => {
     if (onlineMode) return;
+    stopAutoplay();
     await api("/api/redo", "POST");
     await refresh();
+    await maybeAutoplay();
 });
 
 on(modeEl, "change", async() => {
     const mode = Number(modeEl.value);
 
     if (mode === 3) {
+        stopAutoplay();
         try {
             await joinOnlineMatch();
         } catch (e) {
@@ -600,6 +630,8 @@ on(modeEl, "change", async() => {
         return;
     }
 
+    stopAutoplay();
+
     onlineMode = false;
     onlineRoomId = null;
     onlinePlayerToken = null;
@@ -610,18 +642,23 @@ on(modeEl, "change", async() => {
 
     await api("/api/set", "POST", { mode });
     await refresh();
+    await maybeAutoplay();
 });
 
 on(robotEl, "change", async() => {
     if (onlineMode) return;
+    stopAutoplay();
     await api("/api/set", "POST", { robot_algo: robotEl.value });
     await refresh();
+    await maybeAutoplay();
 });
 
 on(depthEl, "change", async() => {
     if (onlineMode) return;
+    stopAutoplay();
     await api("/api/set", "POST", { robot_depth: Number(depthEl.value) });
     await refresh();
+    await maybeAutoplay();
 });
 
 // Import BGA
@@ -639,6 +676,8 @@ on(btnImportBga, "click", async() => {
             return;
         }
 
+        stopAutoplay();
+
         onlineMode = false;
         onlineRoomId = null;
         onlinePlayerToken = null;
@@ -655,6 +694,7 @@ on(btnImportBga, "click", async() => {
         await api("/api/bga/load_table", "POST", { table_id: tableId });
         hoveredCol = null;
         await refresh();
+        await maybeAutoplay();
     } catch (e) {
         alert("Impossible d'importer la table BGA.\n" + e.message);
     }
@@ -676,6 +716,8 @@ on(bgaTableIdEl, "keydown", async(ev) => {
             return;
         }
 
+        stopAutoplay();
+
         onlineMode = false;
         onlineRoomId = null;
         onlinePlayerToken = null;
@@ -692,6 +734,7 @@ on(bgaTableIdEl, "keydown", async(ev) => {
         await api("/api/bga/load_table", "POST", { table_id: tableId });
         hoveredCol = null;
         await refresh();
+        await maybeAutoplay();
     } catch (e) {
         alert("Impossible d'importer la table BGA.\n" + e.message);
     }
@@ -722,6 +765,8 @@ on(btnLoadDb, "click", async() => {
         const gid = Number(idStr);
         if (!Number.isFinite(gid)) return;
 
+        stopAutoplay();
+
         onlineMode = false;
         onlineRoomId = null;
         onlinePlayerToken = null;
@@ -737,6 +782,7 @@ on(btnLoadDb, "click", async() => {
 
         await api(`/api/db/load/${gid}`, "POST");
         await refresh();
+        await maybeAutoplay();
     } catch (e) {
         alert("DB non disponible / erreur.\n" + e.message);
     }
@@ -744,6 +790,8 @@ on(btnLoadDb, "click", async() => {
 
 on(btnSettings, "click", async() => {
     if (onlineMode) return;
+
+    stopAutoplay();
 
     const cfg = await api("/api/config");
     const rows = Number(prompt("rows (4..30)", cfg.rows));
@@ -764,6 +812,7 @@ on(btnSettings, "click", async() => {
 
     await api("/api/new", "POST");
     await refresh();
+    await maybeAutoplay();
 });
 
 // modal buttons
@@ -779,10 +828,12 @@ on(btnNewFromWinner, "click", async() => {
         return;
     }
 
+    stopAutoplay();
     lastFinishedSignature = null;
     await api("/api/new", "POST");
     hoveredCol = null;
     await refresh();
+    await maybeAutoplay();
 });
 
 // boot
@@ -791,4 +842,4 @@ if (onlineConsoleEl) {
     pushConsoleMessage("Bienvenue sur Puissance 4.", "info");
 }
 
-refresh();
+refresh().then(() => maybeAutoplay());
