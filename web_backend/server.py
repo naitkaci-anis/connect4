@@ -4,6 +4,7 @@ import os
 import time
 import json
 import secrets
+import threading
 from typing import Any, Dict, Optional, List
 
 from fastapi import FastAPI, HTTPException, Query
@@ -57,6 +58,9 @@ robot_depth: int = 3
 
 match_score = {RED: 0, YELLOW: 0}
 _counted_games: Dict[int, str] = {}
+
+# verrou anti appels IA simultanés
+ai_step_lock = threading.Lock()
 
 # ---------------------------
 # Etat global online
@@ -485,38 +489,52 @@ def api_cursor(payload: CursorIn):
 
 @app.post("/api/step_ai")
 def api_step_ai():
-    if not game.can_play() or game.finished:
+    if not ai_step_lock.acquire(blocking=False):
         return serialize_state()
 
-    if game.mode == 1 and game.current_turn == RED:
-        raise HTTPException(400, "human turn (mode 1, RED)")
+    try:
+        if not game.can_play() or game.finished:
+            return serialize_state()
 
-    valid = game.valid_columns()
-    if not valid:
-        return serialize_state()
+        if game.mode == 1 and game.current_turn == RED:
+            raise HTTPException(400, "human turn (mode 1, RED)")
 
-    if robot_algo == "Random":
-        idx = int(time.time() * 1000) % len(valid)
-        game.drop_in_column(valid[idx])
+        valid = game.valid_columns()
+        if not valid:
+            return serialize_state()
+
+        if robot_algo == "Random":
+            idx = int(time.time() * 1000) % len(valid)
+            game.drop_in_column(valid[idx])
+            _save_game_to_db_if_possible()
+            return serialize_state()
+
+        depth = max(1, min(int(robot_depth), 6))
+
+        cells = game.rows * game.cols
+        if cells >= 81:
+            depth = min(depth, 3)
+        elif cells >= 72:
+            depth = min(depth, 4)
+        elif cells >= 56:
+            depth = min(depth, 5)
+
+        scores: List[Optional[int]] = [None] * game.cols
+        tmp = [row[:] for row in game.board]
+
+        for c in range(game.cols):
+            if tmp[0][c] != EMPTY:
+                scores[c] = None
+            else:
+                scores[c] = minimax_score_for_column(tmp, c, depth, game.current_turn)
+
+        best = pick_best(scores)
+        game.drop_in_column(best)
         _save_game_to_db_if_possible()
         return serialize_state()
 
-    depth = max(1, min(int(robot_depth), 4))
-    if game.rows * game.cols >= 81:
-        depth = min(depth, 3)
-
-    scores: List[Optional[int]] = [None] * game.cols
-    tmp = [row[:] for row in game.board]
-    for c in range(game.cols):
-        if tmp[0][c] != EMPTY:
-            scores[c] = None
-        else:
-            scores[c] = minimax_score_for_column(tmp, c, depth, game.current_turn)
-
-    best = pick_best(scores)
-    game.drop_in_column(best)
-    _save_game_to_db_if_possible()
-    return serialize_state()
+    finally:
+        ai_step_lock.release()
 
 
 @app.get("/api/save")
@@ -760,4 +778,3 @@ def api_db_ping():
 # ----------------
 WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
-
