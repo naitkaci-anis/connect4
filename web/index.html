@@ -1,105 +1,167 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="fr">
 
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Puissance 4 — Web</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connect4 Web</title>
+    <link rel="stylesheet" href="styles.css" />
 </head>
 
 <body>
     <div class="app">
-        <!-- Top bar -->
+        <!-- TOP BAR -->
         <header class="topbar">
-            <div class="controls-left">
-                <div class="control">
-                    <label>Mode :</label>
-                    <select id="mode">
-            <option value="2">2 joueurs (human vs human)</option>
-            <option value="1">1 joueur (human vs robot)</option>
-            <option value="0">0 joueur (robot vs robot)</option>
-          </select>
-                </div>
-
-                <div class="control">
-                    <label>Robot :</label>
-                    <select id="robot">
-            <option value="random">Random</option>
-            <option value="minimax">MiniMax</option>
-          </select>
-                </div>
-
-                <div class="control">
-                    <label>Profondeur :</label>
-                    <input id="depth" type="number" min="1" max="8" value="3" />
-                </div>
+            <div class="brand">
+                <h1>Puissance 4</h1>
             </div>
 
-            <div class="controls-right">
-                <button class="btn" id="btnNew">Nouveau</button>
-                <button class="btn" id="btnPause">Pause</button>
-                <button class="btn" id="btnPrev">← Précédent</button>
-                <button class="btn" id="btnNext">→ Suivant</button>
+            <div class="toolbar">
+                <div class="control-group">
+                    <label for="mode">Mode</label>
+                    <select id="mode">
+                        <option value="0">IA vs IA</option>
+                        <option value="1">Joueur vs IA</option>
+                        <option value="2">Joueur vs Joueur</option>
+                        <option value="3">En ligne</option>
+                    </select>
+                </div>
 
-                <!-- ✅ On supprime Sauvegarder + Charger -->
-                <!-- ✅ On garde DB mais on renomme -->
-                <button class="btn" id="btnLoadDb">Parties précédentes</button>
+                <div class="control-group">
+                    <label for="robot">Robot</label>
+                    <select id="robot">
+                        <option value="random">Random</option>
+                        <option value="minimax">MiniMax</option>
+                    </select>
+                </div>
 
-                <button class="btn" id="btnSettings">⚙ Réglages</button>
+                <div class="control-group">
+                    <label for="depth">Profondeur</label>
+                    <select id="depth">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                    </select>
+                </div>
+
+                <div class="actions">
+                    <button id="btnNew" class="btn primary">Nouvelle partie</button>
+                    <button id="btnPause" class="btn">Pause / Reprendre</button>
+                    <button id="btnPrev" class="btn">Undo</button>
+                    <button id="btnNext" class="btn">Redo</button>
+                    <button id="btnLoadDb" class="btn">Parties précédentes</button>
+                    <button id="btnSettings" class="btn">Paramètres</button>
+                </div>
             </div>
         </header>
 
-        <!-- Main area -->
-        <main class="main">
-            <div class="layout">
-                <div class="board-wrap">
-                    <div class="colnums" id="colnums"></div>
+        <!-- STATUS BAR -->
+        <section class="statusbar">
+            <div class="status-item">
+                <span class="status-label">Statut</span>
+                <span id="statusLeft" class="status-value">Chargement...</span>
+            </div>
 
-                    <!-- ghost piece -->
-                    <div class="ghost" id="ghost"></div>
+            <div class="status-item">
+                <span class="status-label">Robot</span>
+                <span id="robotTxt" class="status-value">-</span>
+            </div>
 
-                    <!-- board -->
-                    <div class="board" id="board"></div>
+            <div class="status-item">
+                <span class="status-label">Coups</span>
+                <span id="movesTxt" class="status-value">0/0</span>
+            </div>
+
+            <div class="progress-wrap">
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill"></div>
                 </div>
+                <span id="progressTxt" class="progress-text">0/0</span>
+            </div>
+        </section>
 
-                <aside class="sidebar">
-                    <div class="panel">
-                        <div class="panel-title">Historique des coups</div>
-                        <div class="panel-sub" id="movesMeta">0 coup</div>
-                        <ol class="moves" id="movesList"></ol>
+        <!-- MAIN -->
+        <main class="main-layout">
+            <!-- LEFT CONSOLE -->
+            <aside class="leftbar">
+                <div class="panel console-panel">
+                    <div class="panel-title">Console de partie</div>
+                    <div class="panel-sub">Informations de la partie en cours</div>
+                    <div id="onlineConsole" class="console-box">
+                        <div class="console-line info">Bienvenue sur Puissance 4.</div>
                     </div>
-                </aside>
-            </div>
-        </main>
-
-        <!-- Bottom status bar -->
-        <footer class="statusbar">
-            <div id="statusLeft" class="status-left"></div>
-
-            <div class="status-right">
-                <div class="progress">
-                    <div class="progress-fill" id="progressFill" style="width:0%"></div>
                 </div>
-                <div id="progressTxt" class="progress-txt">0/0</div>
-            </div>
-        </footer>
+            </aside>
+
+            <!-- BOARD SIDE -->
+            <section class="board-section">
+                <div class="board-shell">
+                    <div id="colnums" class="colnums"></div>
+
+                    <div class="board-wrap">
+                        <div id="ghost" class="ghost"></div>
+                        <div id="board" class="board"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SIDEBAR -->
+            <aside class="sidebar">
+                <!-- SCORE -->
+                <div class="panel score-panel">
+                    <div class="panel-title">Score</div>
+
+                    <div class="score-row">
+                        <div class="score-box red">
+                            <span>Rouge</span>
+                            <strong id="scoreR">0</strong>
+                        </div>
+
+                        <div class="score-box yellow">
+                            <span>Jaune</span>
+                            <strong id="scoreY">0</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- IMPORT BGA -->
+                <div class="panel import-panel">
+                    <div class="panel-title">Importer une partie BGA</div>
+                    <div class="panel-sub">Saisis un numéro de table puis charge la partie.</div>
+
+                    <div class="import-row">
+                        <input id="bgaTableId" type="text" inputmode="numeric" placeholder="Ex: 810055902" />
+                        <button id="btnImportBga" class="btn primary">Importer BGA</button>
+                    </div>
+                </div>
+
+                <!-- MOVES HISTORY -->
+                <div class="panel">
+                    <div class="panel-title">Historique des coups</div>
+                    <div class="panel-sub" id="movesMeta">0 coup</div>
+                    <ol class="moves" id="movesList"></ol>
+                </div>
+            </aside>
+        </main>
     </div>
 
-    <!-- Winner modal -->
-    <div class="modal" id="winnerModal" aria-hidden="true">
+    <!-- WINNER MODAL -->
+    <div id="winnerModal" class="modal">
         <div class="modal-card">
-            <div class="modal-title" id="winnerTitle">Fin de partie</div>
-            <div class="modal-text" id="winnerText"></div>
+            <h2 id="winnerTitle">Fin de partie</h2>
+            <p id="winnerText">Le gagnant est ...</p>
+
             <div class="modal-actions">
-                <button class="btn" id="btnCloseWinner">OK</button>
-                <button class="btn btn-primary" id="btnNewFromWinner">Nouvelle partie</button>
+                <button id="btnCloseWinner" class="btn">Fermer</button>
+                <button id="btnNewFromWinner" class="btn primary">Nouvelle partie</button>
             </div>
         </div>
     </div>
 
-    <script src="/app.js"></script>
+    <script src="app.js"></script>
 </body>
 
 </html>
-
