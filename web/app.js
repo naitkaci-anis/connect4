@@ -4,6 +4,7 @@ async function api(path, method = "GET", body = null) {
         opts.headers["Content-Type"] = "application/json";
         opts.body = JSON.stringify(body);
     }
+
     const res = await fetch(path, opts);
 
     const text = await res.text();
@@ -18,14 +19,22 @@ async function api(path, method = "GET", body = null) {
     return data;
 }
 
-// helpers (0 optional chaining)
-function on(el, event, handler) { if (el) el.addEventListener(event, handler); }
+// helpers
+function on(el, event, handler) {
+    if (el) el.addEventListener(event, handler);
+}
 
-function removeClass(el, cls) { if (el) el.classList.remove(cls); }
+function removeClass(el, cls) {
+    if (el) el.classList.remove(cls);
+}
 
-function addClass(el, cls) { if (el) el.classList.add(cls); }
+function addClass(el, cls) {
+    if (el) el.classList.add(cls);
+}
 
-function setText(el, txt) { if (el) el.textContent = txt; }
+function setText(el, txt) {
+    if (el) el.textContent = txt;
+}
 
 // DOM
 const boardEl = document.getElementById("board");
@@ -49,13 +58,11 @@ const btnNew = document.getElementById("btnNew");
 const btnPause = document.getElementById("btnPause");
 const btnPrev = document.getElementById("btnPrev");
 const btnNext = document.getElementById("btnNext");
-
-// ✅ Save/Load supprimés => pas de btnSave / btnLoad
-
-// ✅ DB gardé mais renommé en “Parties précédentes”
 const btnLoadDb = document.getElementById("btnLoadDb");
-
 const btnSettings = document.getElementById("btnSettings");
+
+const bgaTableIdEl = document.getElementById("bgaTableId");
+const btnImportBga = document.getElementById("btnImportBga");
 
 const statusLeft = document.getElementById("statusLeft");
 const robotTxt = document.getElementById("robotTxt");
@@ -65,12 +72,141 @@ const scoreY = document.getElementById("scoreY");
 const progressFill = document.getElementById("progressFill");
 const progressTxt = document.getElementById("progressTxt");
 
+const onlineConsoleEl = document.getElementById("onlineConsole");
+
 // state
 let state = null;
 let autoplayRunning = false;
 let hoveredCol = null;
 
-// colnums aligned with board
+// online state
+let onlineMode = false;
+let onlineRoomId = null;
+let onlinePlayerToken = null;
+let onlineColor = null;
+let onlinePollingHandle = null;
+
+// winner modal anti-loop
+let lastFinishedSignature = null;
+
+// console anti-spam
+let lastConsoleSignature = null;
+
+// ============================================================
+// CONSOLE HELPERS
+// ============================================================
+
+function clearConsole() {
+    if (!onlineConsoleEl) return;
+    onlineConsoleEl.innerHTML = "";
+}
+
+function pushConsoleMessage(text, type = "info") {
+    if (!onlineConsoleEl) return;
+
+    const line = document.createElement("div");
+    line.className = "console-line " + type;
+    line.textContent = text;
+
+    onlineConsoleEl.prepend(line);
+
+    while (onlineConsoleEl.children.length > 12) {
+        onlineConsoleEl.removeChild(onlineConsoleEl.lastChild);
+    }
+}
+
+function pushConsoleMessageOnce(signature, text, type = "info") {
+    if (lastConsoleSignature === signature) return;
+    lastConsoleSignature = signature;
+    pushConsoleMessage(text, type);
+}
+
+// ============================================================
+// ONLINE HELPERS
+// ============================================================
+
+function stopOnlinePolling() {
+    if (onlinePollingHandle) {
+        clearInterval(onlinePollingHandle);
+        onlinePollingHandle = null;
+    }
+}
+
+function startOnlinePolling() {
+    stopOnlinePolling();
+
+    if (!onlineMode || !onlineRoomId || !onlinePlayerToken) return;
+
+    onlinePollingHandle = setInterval(async() => {
+        try {
+            await refresh();
+        } catch (e) {
+            console.error("online polling failed:", e);
+        }
+    }, 1500);
+}
+
+async function joinOnlineMatch() {
+    const data = await api("/api/online/join", "POST", {});
+
+    onlineMode = true;
+    onlineRoomId = data.room_id;
+    onlinePlayerToken = data.player_token;
+    onlineColor = data.color || null;
+
+    clearConsole();
+    lastConsoleSignature = null;
+    lastFinishedSignature = null;
+
+    if (onlineColor === "R") {
+        pushConsoleMessage("Tu es le joueur Rouge.", "success");
+    } else if (onlineColor === "Y") {
+        pushConsoleMessage("Tu es le joueur Jaune.", "success");
+    }
+
+    if (data.waiting) {
+        pushConsoleMessage("En attente d'un adversaire...", "warn");
+        setText(statusLeft, `En attente d'un adversaire... (${onlineColor || "?"})`);
+    } else {
+        pushConsoleMessage("Adversaire trouvé. La partie commence.", "success");
+        setText(statusLeft, `Partie en ligne • Tu es ${onlineColor === "R" ? "Rouge" : "Jaune"}`);
+    }
+
+    startOnlinePolling();
+    await refresh();
+}
+
+async function refreshOnline() {
+    if (!onlineRoomId || !onlinePlayerToken) {
+        throw new Error("Session online incomplète");
+    }
+
+    state = await api(
+        `/api/online/state?room_id=${encodeURIComponent(onlineRoomId)}&player_token=${encodeURIComponent(onlinePlayerToken)}`
+    );
+
+    if (modeEl) modeEl.value = "3";
+    render();
+}
+
+async function playOnlineMove(col) {
+    if (!onlineRoomId || !onlinePlayerToken) {
+        throw new Error("Session online incomplète");
+    }
+
+    await api("/api/online/move", "POST", {
+        room_id: onlineRoomId,
+        player_token: onlinePlayerToken,
+        col
+    });
+
+    await refresh();
+}
+
+// ============================================================
+// RENDER HELPERS
+// ============================================================
+
 function buildColNums(cols) {
     if (!colnumsEl) return;
 
@@ -93,12 +229,16 @@ function setHoverCol(c) {
 
 function highlightColumn() {
     const els = document.querySelectorAll(".cell.col-hover");
-    for (let i = 0; i < els.length; i++) els[i].classList.remove("col-hover");
+    for (let i = 0; i < els.length; i++) {
+        els[i].classList.remove("col-hover");
+    }
 
     if (hoveredCol === null) return;
 
     const colEls = document.querySelectorAll(`.cell[data-col="${hoveredCol}"]`);
-    for (let i = 0; i < colEls.length; i++) colEls[i].classList.add("col-hover");
+    for (let i = 0; i < colEls.length; i++) {
+        colEls[i].classList.add("col-hover");
+    }
 }
 
 function hideGhost() {
@@ -113,8 +253,12 @@ function updateGhost() {
         return;
     }
 
-    // colonne pleine => pas de ghost
     if (state.board && state.board[0] && state.board[0][hoveredCol] !== ".") {
+        hideGhost();
+        return;
+    }
+
+    if (onlineMode && onlineColor && state.current_turn !== onlineColor) {
         hideGhost();
         return;
     }
@@ -135,7 +279,9 @@ function updateGhost() {
     const cellPx = Number(cell.replace("px", "")) || 64;
 
     let colH = 40;
-    if (colnumsEl && typeof colnumsEl.offsetHeight === "number") colH = colnumsEl.offsetHeight;
+    if (colnumsEl && typeof colnumsEl.offsetHeight === "number") {
+        colH = colnumsEl.offsetHeight;
+    }
 
     const top = colH + (padTop - cellPx * 0.55);
     ghostEl.style.top = `${Math.max(0, top)}px`;
@@ -177,13 +323,83 @@ function renderMoves() {
     }
 }
 
+function updateOnlineConsoleFromState() {
+    if (!onlineMode || !state) return;
+
+    const waiting = state.online && state.online.waiting;
+    const total = state.total || 0;
+
+    if (waiting) {
+        pushConsoleMessageOnce(
+            `waiting|${onlineRoomId}|${total}`,
+            "En attente d'un adversaire...",
+            "warn"
+        );
+        return;
+    }
+
+    if (total === 0) {
+        pushConsoleMessageOnce(
+            `start|${onlineRoomId}`,
+            "Adversaire trouvé. La partie commence.",
+            "success"
+        );
+    }
+
+    if (state.finished) {
+        if (state.draw) {
+            pushConsoleMessageOnce(
+                `finish|draw|${state.total}`,
+                "La partie est terminée : égalité.",
+                "warn"
+            );
+        } else if (state.winner === onlineColor) {
+            pushConsoleMessageOnce(
+                `finish|win|${state.total}`,
+                "Bravo, tu as gagné la partie.",
+                "success"
+            );
+        } else {
+            pushConsoleMessageOnce(
+                `finish|lose|${state.total}`,
+                "La partie est terminée. Tu as perdu.",
+                "danger"
+            );
+        }
+        return;
+    }
+
+    if (state.current_turn === onlineColor) {
+        pushConsoleMessageOnce(
+            `turn|mine|${state.total}|${state.current_turn}`,
+            "C'est à toi de jouer.",
+            "success"
+        );
+    } else {
+        pushConsoleMessageOnce(
+            `turn|other|${state.total}|${state.current_turn}`,
+            "Tour de l'adversaire...",
+            "info"
+        );
+    }
+}
+
 function renderWinnerModal() {
     if (!winnerModal || !state) return;
 
     if (!state.finished) {
         winnerModal.classList.remove("show");
+        lastFinishedSignature = null;
         return;
     }
+
+    const sig = `${state.game_index}|${state.winner}|${state.draw}|${state.total}`;
+
+    if (lastFinishedSignature === sig) {
+        return;
+    }
+
+    lastFinishedSignature = sig;
 
     addClass(winnerModal, "show");
     setText(winnerTitle, "Fin de partie");
@@ -204,8 +420,14 @@ function render() {
 
     buildColNums(state.cols);
 
-    setText(statusLeft, state.status_text);
-    setText(robotTxt, state.robot_algo);
+    let statusText = state.status_text;
+    if (onlineMode && onlineColor) {
+        const colorTxt = onlineColor === "R" ? "Rouge" : "Jaune";
+        statusText = `[Online] Tu es ${colorTxt} • ${state.status_text}`;
+    }
+
+    setText(statusLeft, statusText);
+    setText(robotTxt, state.robot_algo || "-");
     setText(movesTxt, `${state.cursor}/${state.total}`);
     setText(progressTxt, `${state.cursor}/${state.total}`);
 
@@ -214,8 +436,10 @@ function render() {
         progressFill.style.width = `${(state.cursor / Math.max(1, totalSlots)) * 100}%`;
     }
 
-    setText(scoreR, String(state.match_score.R));
-    setText(scoreY, String(state.match_score.Y));
+    if (state.match_score) {
+        setText(scoreR, String(state.match_score.R));
+        setText(scoreY, String(state.match_score.Y));
+    }
 
     if (!boardEl) return;
 
@@ -243,24 +467,44 @@ function render() {
     }
 
     renderMoves();
+
+    if (onlineMode) {
+        updateOnlineConsoleFromState();
+    }
+
     renderWinnerModal();
     updateGhost();
 }
 
 async function refresh() {
-    state = await api("/api/state");
+    try {
+        if (onlineMode) {
+            await refreshOnline();
+        } else {
+            state = await api("/api/state");
 
-    if (modeEl) modeEl.value = String(state.mode);
-    if (robotEl) robotEl.value = state.robot_algo.toLowerCase() === "minimax" ? "minimax" : "random";
-    if (depthEl) depthEl.value = String(state.robot_depth);
+            if (modeEl) modeEl.value = String(state.mode);
+            if (robotEl) robotEl.value = state.robot_algo.toLowerCase() === "minimax" ? "minimax" : "random";
+            if (depthEl) depthEl.value = String(state.robot_depth);
 
-    render();
-    maybeAutoplay();
+            render();
+            maybeAutoplay();
+        }
+    } catch (e) {
+        console.error("refresh failed:", e);
+        setText(statusLeft, "Erreur de chargement");
+        alert("Erreur chargement état du jeu : " + e.message);
+    }
 }
 
-// ✅ SANS animation: click -> API -> refresh
+// click -> API -> refresh
 async function onColClick(col) {
     try {
+        if (onlineMode) {
+            await playOnlineMove(col);
+            return;
+        }
+
         await api("/api/move", "POST", { col });
         await refresh();
     } catch (e) {
@@ -268,12 +512,15 @@ async function onColClick(col) {
     }
 }
 
-function stopAutoplay() { autoplayRunning = false; }
+function stopAutoplay() {
+    autoplayRunning = false;
+}
 
 function maybeAutoplay() {
     stopAutoplay();
     if (!state) return;
     if (state.paused || state.finished) return;
+    if (onlineMode) return;
 
     const mode = state.mode;
     const turn = state.current_turn;
@@ -293,54 +540,172 @@ function maybeAutoplay() {
             }
 
             await new Promise((r) => setTimeout(r, 350));
-            if (!state || state.paused || state.finished) autoplayRunning = false;
+            if (!state || state.paused || state.finished) {
+                autoplayRunning = false;
+            }
         }
     })();
 }
 
 // events
 on(btnNew, "click", async() => {
+    onlineMode = false;
+    onlineRoomId = null;
+    onlinePlayerToken = null;
+    onlineColor = null;
+    stopOnlinePolling();
+    lastConsoleSignature = null;
+    lastFinishedSignature = null;
+
+    if (onlineConsoleEl) {
+        clearConsole();
+        pushConsoleMessage("Nouvelle partie locale lancée.", "info");
+    }
+
     await api("/api/new", "POST");
     hoveredCol = null;
     await refresh();
 });
 
 on(btnPause, "click", async() => {
+    if (onlineMode) return;
     await api("/api/pause", "POST");
     await refresh();
 });
 
 on(btnPrev, "click", async() => {
+    if (onlineMode) return;
     await api("/api/undo", "POST");
     await refresh();
 });
 
 on(btnNext, "click", async() => {
+    if (onlineMode) return;
     await api("/api/redo", "POST");
     await refresh();
 });
 
 on(modeEl, "change", async() => {
-    await api("/api/set", "POST", { mode: Number(modeEl.value) });
+    const mode = Number(modeEl.value);
+
+    if (mode === 3) {
+        try {
+            await joinOnlineMatch();
+        } catch (e) {
+            onlineMode = false;
+            stopOnlinePolling();
+            alert("Impossible de lancer le mode en ligne.\n" + e.message);
+            await refresh();
+        }
+        return;
+    }
+
+    onlineMode = false;
+    onlineRoomId = null;
+    onlinePlayerToken = null;
+    onlineColor = null;
+    stopOnlinePolling();
+    lastConsoleSignature = null;
+    lastFinishedSignature = null;
+
+    await api("/api/set", "POST", { mode });
     await refresh();
 });
 
 on(robotEl, "change", async() => {
+    if (onlineMode) return;
     await api("/api/set", "POST", { robot_algo: robotEl.value });
     await refresh();
 });
 
 on(depthEl, "change", async() => {
+    if (onlineMode) return;
     await api("/api/set", "POST", { robot_depth: Number(depthEl.value) });
     await refresh();
 });
 
-// ✅ Parties précédentes (DB) : garde la logique DB
+// Import BGA
+on(btnImportBga, "click", async() => {
+    try {
+        const raw = bgaTableIdEl ? bgaTableIdEl.value.trim() : "";
+        if (!raw) {
+            alert("Saisis un numéro de table BGA.");
+            return;
+        }
+
+        const tableId = Number(raw);
+        if (!Number.isFinite(tableId) || tableId <= 0) {
+            alert("Numéro de table invalide.");
+            return;
+        }
+
+        onlineMode = false;
+        onlineRoomId = null;
+        onlinePlayerToken = null;
+        onlineColor = null;
+        stopOnlinePolling();
+        lastConsoleSignature = null;
+        lastFinishedSignature = null;
+
+        if (onlineConsoleEl) {
+            clearConsole();
+            pushConsoleMessage(`Import de la table BGA ${tableId}...`, "info");
+        }
+
+        await api("/api/bga/load_table", "POST", { table_id: tableId });
+        hoveredCol = null;
+        await refresh();
+    } catch (e) {
+        alert("Impossible d'importer la table BGA.\n" + e.message);
+    }
+});
+
+on(bgaTableIdEl, "keydown", async(ev) => {
+    if (ev.key !== "Enter") return;
+
+    try {
+        const raw = bgaTableIdEl ? bgaTableIdEl.value.trim() : "";
+        if (!raw) {
+            alert("Saisis un numéro de table BGA.");
+            return;
+        }
+
+        const tableId = Number(raw);
+        if (!Number.isFinite(tableId) || tableId <= 0) {
+            alert("Numéro de table invalide.");
+            return;
+        }
+
+        onlineMode = false;
+        onlineRoomId = null;
+        onlinePlayerToken = null;
+        onlineColor = null;
+        stopOnlinePolling();
+        lastConsoleSignature = null;
+        lastFinishedSignature = null;
+
+        if (onlineConsoleEl) {
+            clearConsole();
+            pushConsoleMessage(`Import de la table BGA ${tableId}...`, "info");
+        }
+
+        await api("/api/bga/load_table", "POST", { table_id: tableId });
+        hoveredCol = null;
+        await refresh();
+    } catch (e) {
+        alert("Impossible d'importer la table BGA.\n" + e.message);
+    }
+});
+
+// Parties précédentes (DB)
 on(btnLoadDb, "click", async() => {
     try {
         const data = await api("/api/db/list");
         const games = data.games || [];
-        if (!games.length) return alert("Aucune partie enregistrée.");
+        if (!games.length) {
+            alert("Aucune partie enregistrée.");
+            return;
+        }
 
         const last = games
             .slice(0, 15)
@@ -353,8 +718,22 @@ on(btnLoadDb, "click", async() => {
 
         const idStr = prompt("Choisis l'ID d'une partie à charger.\n\nDernières parties:\n" + last);
         if (!idStr) return;
+
         const gid = Number(idStr);
         if (!Number.isFinite(gid)) return;
+
+        onlineMode = false;
+        onlineRoomId = null;
+        onlinePlayerToken = null;
+        onlineColor = null;
+        stopOnlinePolling();
+        lastConsoleSignature = null;
+        lastFinishedSignature = null;
+
+        if (onlineConsoleEl) {
+            clearConsole();
+            pushConsoleMessage(`Chargement de la partie #${gid}...`, "info");
+        }
 
         await api(`/api/db/load/${gid}`, "POST");
         await refresh();
@@ -364,6 +743,8 @@ on(btnLoadDb, "click", async() => {
 });
 
 on(btnSettings, "click", async() => {
+    if (onlineMode) return;
+
     const cfg = await api("/api/config");
     const rows = Number(prompt("rows (4..30)", cfg.rows));
     const cols = Number(prompt("cols (4..30)", cfg.cols));
@@ -372,20 +753,42 @@ on(btnSettings, "click", async() => {
     const margin = Number(prompt("margin (5..50)", cfg.margin));
     const drop_delay_ms = Number(prompt("drop_delay_ms (0..2000)", cfg.drop_delay_ms));
 
-    await api("/api/config", "POST", { rows, cols, starting_color, cell_size, margin, drop_delay_ms });
+    await api("/api/config", "POST", {
+        rows,
+        cols,
+        starting_color,
+        cell_size,
+        margin,
+        drop_delay_ms
+    });
+
     await api("/api/new", "POST");
     await refresh();
 });
 
 // modal buttons
-on(btnCloseWinner, "click", () => removeClass(winnerModal, "show"));
+on(btnCloseWinner, "click", () => {
+    removeClass(winnerModal, "show");
+});
 
 on(btnNewFromWinner, "click", async() => {
     removeClass(winnerModal, "show");
+
+    if (onlineMode) {
+        pushConsoleMessage("Partie terminée. Pour rejouer en ligne, relance le mode En ligne.", "warn");
+        return;
+    }
+
+    lastFinishedSignature = null;
     await api("/api/new", "POST");
     hoveredCol = null;
     await refresh();
 });
 
 // boot
+if (onlineConsoleEl) {
+    clearConsole();
+    pushConsoleMessage("Bienvenue sur Puissance 4.", "info");
+}
+
 refresh();
