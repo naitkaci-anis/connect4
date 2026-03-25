@@ -1,6 +1,3 @@
-# core.py
-# Modèle + règles + IA + config helpers (zéro Tkinter)
-
 from __future__ import annotations
 
 import json
@@ -10,9 +7,9 @@ import math
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Tuple, Dict, Any
 
-# ----------------------------
+# ============================================================
 # Config / constantes jeu
-# ----------------------------
+# ============================================================
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "rows": 8,
@@ -56,9 +53,7 @@ def ensure_config() -> Dict[str, Any]:
     cols = max(4, min(cols, 30))
 
     starting = cfg.get("starting_color", DEFAULT_CONFIG["starting_color"])
-    starting = (
-        starting if starting in (RED, YELLOW) else DEFAULT_CONFIG["starting_color"]
-    )
+    starting = starting if starting in (RED, YELLOW) else DEFAULT_CONFIG["starting_color"]
 
     cell_size = int(cfg.get("cell_size", DEFAULT_CONFIG["cell_size"]))
     cell_size = max(30, min(cell_size, 120))
@@ -106,10 +101,48 @@ def next_game_index() -> int:
     return n
 
 
-# ----------------------------
-# Modèle / état de partie
-# ----------------------------
+# ============================================================
+# Helpers de plateau
+# ============================================================
 
+def count_tokens(board: List[List[str]]) -> Tuple[int, int]:
+    r_count = 0
+    y_count = 0
+    for row in board:
+        for cell in row:
+            if cell == RED:
+                r_count += 1
+            elif cell == YELLOW:
+                y_count += 1
+    return r_count, y_count
+
+
+def infer_current_turn(board: List[List[str]], starting_color: str = RED) -> str:
+    """
+    Déduit à qui est le tour à partir du nombre de pions.
+    Lève ValueError si le comptage est incohérent.
+    """
+    r_count, y_count = count_tokens(board)
+
+    if starting_color == RED:
+        if r_count == y_count:
+            return RED
+        if r_count == y_count + 1:
+            return YELLOW
+    else:
+        if r_count == y_count:
+            return YELLOW
+        if y_count == r_count + 1:
+            return RED
+
+    raise ValueError(
+        f"Comptage incohérent pour starting_color={starting_color}: R={r_count}, Y={y_count}"
+    )
+
+
+# ============================================================
+# Modèle / état de partie
+# ============================================================
 
 @dataclass
 class Move:
@@ -199,7 +232,6 @@ class Connect4:
             self.winning_line = line
             return
 
-        # plateau plein ?
         if all(self.board[0][c] != EMPTY for c in range(self.cols)):
             self.finished = True
             self.draw = True
@@ -208,6 +240,7 @@ class Connect4:
         self, r: int, c: int, color: str
     ) -> Optional[List[Tuple[int, int]]]:
         directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
+
         for dr, dc in directions:
             cells = [(r, c)]
 
@@ -232,9 +265,9 @@ class Connect4:
                 cc -= dc
 
             if len(cells) >= 4:
-                # on retourne une ligne stable
                 cells_sorted = sorted(cells, key=lambda x: (x[0] * dr + x[1] * dc))
                 return cells_sorted[:4]
+
         return None
 
     def apply_to_cursor(self, cursor: int):
@@ -271,7 +304,7 @@ class Connect4:
             cols=self.cols,
             starting_color=self.starting_color,
             current_turn=self.current_turn,
-            board=self.board,
+            board=[row[:] for row in self.board],
             moves=[asdict(m) for m in self.moves],
             cursor=self.cursor,
             winner=self.winner,
@@ -295,9 +328,8 @@ class Connect4:
 
 
 # ============================================================
-# ===============  MISSION 1.3 — MINIMAX  ====================
+# Minimax / heuristiques
 # ============================================================
-
 
 def _opp(color: str) -> str:
     return RED if color == YELLOW else YELLOW
@@ -308,15 +340,29 @@ def _valid_cols(board: List[List[str]]) -> List[int]:
     return [c for c in range(cols) if board[0][c] == EMPTY]
 
 
+def _ordered_cols(board: List[List[str]]) -> List[int]:
+    """
+    Retourne les colonnes valides en testant d'abord le centre,
+    puis les colonnes les plus proches du centre.
+    """
+    cols = len(board[0])
+    center = cols // 2
+    valid = _valid_cols(board)
+    valid.sort(key=lambda c: abs(c - center))
+    return valid
+
+
 def _drop(board: List[List[str]], col: int, color: str) -> Optional[int]:
     rows = len(board)
     if board[0][col] != EMPTY:
         return None
+
     r = rows - 1
     while r >= 0 and board[r][col] != EMPTY:
         r -= 1
     if r < 0:
         return None
+
     board[r][col] = color
     return r
 
@@ -360,54 +406,158 @@ def _full(board: List[List[str]]) -> bool:
     return all(x != EMPTY for x in board[0])
 
 
-def _score_window(win: List[str], ai: str) -> int:
+def _playable_empty_count(win: List[str], playable_mask: List[bool]) -> int:
+    c = 0
+    for i in range(4):
+        if win[i] == EMPTY and playable_mask[i]:
+            c += 1
+    return c
+
+
+def _score_window(win: List[str], playable_mask: List[bool], ai: str) -> int:
+    """
+    Heuristique :
+    - récompense les menaces jouables immédiatement
+    - pénalise davantage les menaces adverses
+    - valorise aussi les structures préparatoires
+    """
     opp = _opp(ai)
     a = win.count(ai)
     o = win.count(opp)
     e = win.count(EMPTY)
+    playable_empties = _playable_empty_count(win, playable_mask)
 
     if a == 4:
-        return 100000
-    if a == 3 and e == 1:
-        return 200
-    if a == 2 and e == 2:
-        return 30
-    if o == 3 and e == 1:
-        return -250
+        return 1_000_000
     if o == 4:
-        return -100000
+        return -1_000_000
+
+    # Cas purs IA
+    if o == 0:
+        if a == 3 and e == 1:
+            return 15_000 if playable_empties == 1 else 2_000
+        if a == 2 and e == 2:
+            return 300 if playable_empties >= 1 else 80
+        if a == 1 and e == 3:
+            return 8
+
+    # Cas purs adverses
+    if a == 0:
+        if o == 3 and e == 1:
+            return -18_000 if playable_empties == 1 else -2_500
+        if o == 2 and e == 2:
+            return -350 if playable_empties >= 1 else -90
+        if o == 1 and e == 3:
+            return -10
+
     return 0
+
+
+def _count_immediate_wins(board: List[List[str]], color: str) -> int:
+    """
+    Compte le nombre de colonnes qui donnent une victoire immédiate.
+    Utile pour détecter les doubles menaces.
+    """
+    count = 0
+    for c in _valid_cols(board):
+        r = _drop(board, c, color)
+        if r is None:
+            continue
+        if _is_win(board, color):
+            count += 1
+        _undo(board, r, c)
+    return count
+
+
+def immediate_winning_columns(board: List[List[str]], color: str) -> List[int]:
+    """
+    Retourne la liste des colonnes qui gagnent immédiatement.
+    """
+    wins: List[int] = []
+    for c in _valid_cols(board):
+        r = _drop(board, c, color)
+        if r is None:
+            continue
+        if _is_win(board, color):
+            wins.append(c)
+        _undo(board, r, c)
+    return wins
 
 
 def _eval(board: List[List[str]], ai: str) -> int:
     rows = len(board)
     cols = len(board[0])
+    opp = _opp(ai)
     score = 0
 
-    # center bias
+    # 1) Priorité au centre et aux colonnes proches du centre
     center = cols // 2
-    center_count = sum(1 for r in range(rows) if board[r][center] == ai)
-    score += center_count * 6
+    for c in range(cols):
+        weight = cols - abs(c - center)
+        for r in range(rows):
+            if board[r][c] == ai:
+                score += weight * 10
+            elif board[r][c] == opp:
+                score -= weight * 10
 
+    # 2) Fenêtres de 4 avec notion de case jouable
     # horizontal
     for r in range(rows):
         for c in range(cols - 3):
-            score += _score_window([board[r][c + i] for i in range(4)], ai)
+            win = [board[r][c + i] for i in range(4)]
+            playable_mask = []
+            for i in range(4):
+                rr = r
+                cc = c + i
+                playable = board[rr][cc] == EMPTY and (rr == rows - 1 or board[rr + 1][cc] != EMPTY)
+                playable_mask.append(playable)
+            score += _score_window(win, playable_mask, ai)
 
     # vertical
     for c in range(cols):
         for r in range(rows - 3):
-            score += _score_window([board[r + i][c] for i in range(4)], ai)
+            win = [board[r + i][c] for i in range(4)]
+            playable_mask = []
+            for i in range(4):
+                rr = r + i
+                cc = c
+                playable = board[rr][cc] == EMPTY and (rr == rows - 1 or board[rr + 1][cc] != EMPTY)
+                playable_mask.append(playable)
+            score += _score_window(win, playable_mask, ai)
 
     # diag /
     for r in range(3, rows):
         for c in range(cols - 3):
-            score += _score_window([board[r - i][c + i] for i in range(4)], ai)
+            cells = [(r - i, c + i) for i in range(4)]
+            win = [board[rr][cc] for rr, cc in cells]
+            playable_mask = []
+            for rr, cc in cells:
+                playable = board[rr][cc] == EMPTY and (rr == rows - 1 or board[rr + 1][cc] != EMPTY)
+                playable_mask.append(playable)
+            score += _score_window(win, playable_mask, ai)
 
     # diag \
     for r in range(rows - 3):
         for c in range(cols - 3):
-            score += _score_window([board[r + i][c + i] for i in range(4)], ai)
+            cells = [(r + i, c + i) for i in range(4)]
+            win = [board[rr][cc] for rr, cc in cells]
+            playable_mask = []
+            for rr, cc in cells:
+                playable = board[rr][cc] == EMPTY and (rr == rows - 1 or board[rr + 1][cc] != EMPTY)
+                playable_mask.append(playable)
+            score += _score_window(win, playable_mask, ai)
+
+    # 3) Menaces immédiates / doubles menaces
+    ai_wins = _count_immediate_wins(board, ai)
+    opp_wins = _count_immediate_wins(board, opp)
+
+    score += ai_wins * 25_000
+    score -= opp_wins * 30_000
+
+    if ai_wins >= 2:
+        score += 200_000
+    if opp_wins >= 2:
+        score -= 220_000
 
     return score
 
@@ -423,13 +573,13 @@ def _minimax(
     opp = _opp(ai)
 
     if _is_win(board, ai):
-        return 1000000 + depth
+        return 10_000_000 + depth
     if _is_win(board, opp):
-        return -1000000 - depth
+        return -10_000_000 - depth
     if depth == 0 or _full(board):
         return _eval(board, ai)
 
-    moves = _valid_cols(board)
+    moves = _ordered_cols(board)
 
     if maximizing:
         value = -math.inf
@@ -437,8 +587,9 @@ def _minimax(
             r = _drop(board, c, ai)
             if r is None:
                 continue
-            value = max(value, _minimax(board, depth - 1, alpha, beta, False, ai))
+            child = _minimax(board, depth - 1, alpha, beta, False, ai)
             _undo(board, r, c)
+            value = max(value, child)
             alpha = max(alpha, value)
             if alpha >= beta:
                 break
@@ -449,8 +600,9 @@ def _minimax(
         r = _drop(board, c, opp)
         if r is None:
             continue
-        value = min(value, _minimax(board, depth - 1, alpha, beta, True, ai))
+        child = _minimax(board, depth - 1, alpha, beta, True, ai)
         _undo(board, r, c)
+        value = min(value, child)
         beta = min(beta, value)
         if alpha >= beta:
             break
@@ -464,25 +616,45 @@ def minimax_score_for_column(
     ai: str,
 ) -> Optional[int]:
     """
-    Retourne le score minimax si on joue 'ai' dans la colonne col, sinon None si colonne pleine.
-    board est modifié temporairement puis restauré.
+    Score d'une colonne pour l'IA :
+    - gagner immédiatement si possible
+    - éviter les colonnes qui donnent une victoire immédiate à l'adversaire
     """
     if board[0][col] != EMPTY:
         return None
+
+    opp = _opp(ai)
+
     r = _drop(board, col, ai)
     if r is None:
         return None
-    sc = _minimax(board, depth - 1, -(10**9), 10**9, False, ai)
+
+    # Si ce coup gagne tout de suite, priorité absolue
+    if _is_win(board, ai):
+        _undo(board, r, col)
+        return 99_999_999
+
+    # Si après notre coup l'adversaire a une réponse gagnante immédiate,
+    # on pénalise très fort
+    opp_immediate_wins = _count_immediate_wins(board, opp)
+    if opp_immediate_wins > 0:
+        sc = -50_000_000 - opp_immediate_wins * 100_000
+    else:
+        sc = _minimax(board, depth - 1, -(10**18), 10**18, False, ai)
+
     _undo(board, r, col)
     return sc
 
 
 def pick_best(scores: List[Optional[int]]) -> int:
     """
-    Choisit la meilleure colonne: max score, puis tie-break vers le centre.
+    Choisit la meilleure colonne.
+    En cas d'égalité, préfère le centre.
     """
     cols = len(scores)
     center = cols // 2
     candidates = [(c, s) for c, s in enumerate(scores) if s is not None]
+    if not candidates:
+        raise ValueError("Aucun score valide dans pick_best")
     candidates.sort(key=lambda cs: (cs[1], -abs(cs[0] - center)))
     return candidates[-1][0]
