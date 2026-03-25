@@ -6,10 +6,105 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Connect4 Web</title>
     <link rel="stylesheet" href="styles.css" />
+    <style>
+        /* ── AI thinking bar ── */
+        .ai-thinking-bar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 999;
+            background: var(--color-background-secondary, #f5f5f5);
+            border-bottom: 1px solid #ddd;
+            padding: 6px 16px;
+        }
+        .ai-thinking-inner {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+        }
+        .ai-thinking-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: #378ADD;
+            animation: pulse-dot 1s ease-in-out infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: .3; }
+        }
+        .ai-thinking-progress {
+            flex: 1; height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .ai-thinking-progress > div {
+            height: 100%; background: #378ADD;
+            width: 0%; transition: width .1s linear;
+        }
+
+        /* ── Prediction banner ── */
+        .predict-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 8px 16px;
+            margin: 4px 12px;
+            background: #E6F1FB;
+            border-left: 4px solid #378ADD;
+            border-radius: 6px;
+            font-size: 14px;
+            color: #042C53;
+        }
+        .btn-close-predict {
+            background: none; border: none;
+            cursor: pointer; font-size: 16px;
+            color: #378ADD; padding: 0 4px;
+        }
+
+        /* ── Paint modal ── */
+        .paint-card { max-width: 600px; width: 95vw; }
+        .paint-board {
+            display: grid; gap: 3px;
+            margin: 14px auto;
+            background: #1a4fa0;
+            padding: 8px; border-radius: 8px;
+            width: fit-content;
+        }
+        .paint-cell {
+            width: 36px; height: 36px;
+            border-radius: 50%; cursor: pointer;
+            border: 2px solid rgba(255,255,255,.2);
+            transition: transform .1s;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 11px; font-weight: 600;
+            color: white; user-select: none;
+        }
+        .paint-cell:hover  { transform: scale(1.12); }
+        .paint-cell.empty  { background: #fff; color: #999; }
+        .paint-cell.red    { background: #e53935; }
+        .paint-cell.yellow { background: #fdd835; color: #444; }
+        .paint-controls {
+            display: flex; gap: 20px;
+            justify-content: center;
+            font-size: 14px; margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .paint-controls label { display: flex; align-items: center; gap: 6px; }
+        .paint-note {
+            margin: 0 0 10px 0; text-align: center;
+            font-size: 13px; color: #555;
+        }
+
+        /* ── IA commence — masqué sauf mode 1 ── */
+        #aiStartsGroup { display: none; }
+    </style>
 </head>
 
 <body>
     <div class="app">
+
         <!-- TOP BAR -->
         <header class="topbar">
             <div class="brand">
@@ -17,6 +112,8 @@
             </div>
 
             <div class="toolbar">
+
+                <!-- Mode -->
                 <div class="control-group">
                     <label for="mode">Mode</label>
                     <select id="mode">
@@ -27,14 +124,26 @@
                     </select>
                 </div>
 
+                <!-- IA commence (visible seulement mode 1) -->
+                <div class="control-group" id="aiStartsGroup">
+                    <label for="aiStarts">IA commence</label>
+                    <select id="aiStarts">
+                        <option value="false">Non — Je suis Rouge</option>
+                        <option value="true">Oui — IA est Rouge</option>
+                    </select>
+                </div>
+
+                <!-- Robot -->
                 <div class="control-group">
                     <label for="robot">Robot</label>
                     <select id="robot">
                         <option value="random">Random</option>
                         <option value="minimax">MiniMax</option>
+                        <option value="strategic">Stratégique (BD)</option>
                     </select>
                 </div>
 
+                <!-- Profondeur -->
                 <div class="control-group">
                     <label for="depth">Profondeur</label>
                     <select id="depth">
@@ -44,15 +153,19 @@
                         <option value="4">4</option>
                         <option value="5">5</option>
                         <option value="6">6</option>
+                        <option value="7" selected>7</option>
+                        <option value="8">8</option>
                     </select>
                 </div>
 
                 <div class="actions">
-                    <button id="btnNew" class="btn primary">Nouvelle partie</button>
-                    <button id="btnPause" class="btn">Pause / Reprendre</button>
-                    <button id="btnPrev" class="btn">Undo</button>
-                    <button id="btnNext" class="btn">Redo</button>
-                    <button id="btnLoadDb" class="btn">Parties précédentes</button>
+                    <button id="btnNew"      class="btn primary">Nouvelle partie</button>
+                    <button id="btnPause"    class="btn">Pause / Reprendre</button>
+                    <button id="btnPrev"     class="btn">Undo</button>
+                    <button id="btnNext"     class="btn">Redo</button>
+                    <button id="btnPaint"    class="btn">✏️ Peindre</button>
+                    <button id="btnPredict"  class="btn">🔮 Prédire</button>
+                    <button id="btnLoadDb"   class="btn">Parties précédentes</button>
                     <button id="btnSettings" class="btn">Paramètres</button>
                 </div>
             </div>
@@ -64,17 +177,14 @@
                 <span class="status-label">Statut</span>
                 <span id="statusLeft" class="status-value">Chargement...</span>
             </div>
-
             <div class="status-item">
                 <span class="status-label">Robot</span>
                 <span id="robotTxt" class="status-value">-</span>
             </div>
-
             <div class="status-item">
                 <span class="status-label">Coups</span>
                 <span id="movesTxt" class="status-value">0/0</span>
             </div>
-
             <div class="progress-wrap">
                 <div class="progress-bar">
                     <div id="progressFill" class="progress-fill"></div>
@@ -85,6 +195,7 @@
 
         <!-- MAIN -->
         <main class="main-layout">
+
             <!-- LEFT CONSOLE -->
             <aside class="leftbar">
                 <div class="panel console-panel">
@@ -96,11 +207,10 @@
                 </div>
             </aside>
 
-            <!-- BOARD SIDE -->
+            <!-- BOARD -->
             <section class="board-section">
                 <div class="board-shell">
                     <div id="colnums" class="colnums"></div>
-
                     <div class="board-wrap">
                         <div id="ghost" class="ghost"></div>
                         <div id="board" class="board"></div>
@@ -110,16 +220,15 @@
 
             <!-- SIDEBAR -->
             <aside class="sidebar">
+
                 <!-- SCORE -->
                 <div class="panel score-panel">
                     <div class="panel-title">Score</div>
-
                     <div class="score-row">
                         <div class="score-box red">
                             <span>Rouge</span>
                             <strong id="scoreR">0</strong>
                         </div>
-
                         <div class="score-box yellow">
                             <span>Jaune</span>
                             <strong id="scoreY">0</strong>
@@ -131,7 +240,6 @@
                 <div class="panel import-panel">
                     <div class="panel-title">Importer une partie BGA</div>
                     <div class="panel-sub">Saisis un numéro de table puis charge la partie.</div>
-
                     <div class="import-row">
                         <input id="bgaTableId" type="text" inputmode="numeric" placeholder="Ex: 810055902" />
                         <button id="btnImportBga" class="btn primary">Importer BGA</button>
@@ -144,18 +252,64 @@
                     <div class="panel-sub" id="movesMeta">0 coup</div>
                     <ol class="moves" id="movesList"></ol>
                 </div>
+
             </aside>
         </main>
+    </div>
+
+    <!-- AI THINKING BAR -->
+    <div id="aiThinkingBar" class="ai-thinking-bar" style="display:none">
+        <div class="ai-thinking-inner">
+            <span class="ai-thinking-dot"></span>
+            <span id="aiThinkingTxt">L'IA réfléchit...</span>
+            <div class="ai-thinking-progress">
+                <div id="aiThinkingFill"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PREDICTION BANNER -->
+    <div id="predictBanner" class="predict-banner" style="display:none">
+        <span id="predictText"></span>
+        <button id="btnClosePrediction" class="btn-close-predict">✕</button>
+    </div>
+
+    <!-- PAINT MODAL -->
+    <div id="paintModal" class="modal">
+        <div class="modal-card paint-card">
+            <h2>✏️ Peindre une position</h2>
+            <p>
+                Clique sur les cases pour placer Rouge, Jaune ou effacer.<br>
+                Le serveur déduira automatiquement à qui c'est de jouer selon le nombre de pions.
+            </p>
+            <div class="paint-note">
+                Règle : pas de pions flottants, et le nombre de pions doit être cohérent.
+            </div>
+            <div id="paintBoard" class="paint-board"></div>
+            <div class="paint-controls">
+                <label>Pinceau :
+                    <select id="paintBrush">
+                        <option value="R">Rouge</option>
+                        <option value="Y">Jaune</option>
+                        <option value=".">Effacer</option>
+                    </select>
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button id="btnPaintClear"  class="btn">Réinitialiser</button>
+                <button id="btnPaintCancel" class="btn">Annuler</button>
+                <button id="btnPaintApply"  class="btn primary">Jouer depuis cette position</button>
+            </div>
+        </div>
     </div>
 
     <!-- WINNER MODAL -->
     <div id="winnerModal" class="modal">
         <div class="modal-card">
             <h2 id="winnerTitle">Fin de partie</h2>
-            <p id="winnerText">Le gagnant est ...</p>
-
+            <p  id="winnerText">Le gagnant est ...</p>
             <div class="modal-actions">
-                <button id="btnCloseWinner" class="btn">Fermer</button>
+                <button id="btnCloseWinner"   class="btn">Fermer</button>
                 <button id="btnNewFromWinner" class="btn primary">Nouvelle partie</button>
             </div>
         </div>
@@ -163,5 +317,4 @@
 
     <script src="app.js"></script>
 </body>
-
 </html>
