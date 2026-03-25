@@ -616,3 +616,4 @@ if __name__ == "__main__":
     print(f"  → col {col4+1}  ({(T.time()-t0)*1000:.0f}ms)")
 
     print("\n✅ Tests terminés.")
+
