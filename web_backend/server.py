@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 import json
 import secrets
 import threading
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Tuple
+
+from ai_engine import ai_choose_column_from_game
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +27,7 @@ from core import (
     COLOR_NAME,
     minimax_score_for_column,
     pick_best,
+    _is_win,
 )
 
 # ----------------
@@ -54,7 +60,8 @@ game: Connect4 = Connect4(cfg["rows"], cfg["cols"], cfg["starting_color"])
 game.mode = 2  # 0/1/2
 
 robot_algo: str = "Random"
-robot_depth: int = 3
+robot_depth: int = 7          # ← profondeur augmentée
+ai_starts: bool = False       # True = IA joue Rouge (commence en premier)
 
 match_score = {RED: 0, YELLOW: 0}
 _counted_games: Dict[int, str] = {}
@@ -108,7 +115,7 @@ def _status_text() -> str:
         turn = COLOR_NAME[g.current_turn]
         paused = " (PAUSE)" if g.paused else ""
         txt = f"[Partie #{g.game_index} | {mode_txt}] À jouer : {turn}{paused} | Robot: {robot_algo}"
-        if robot_algo == "MiniMax":
+        if robot_algo in ("MiniMax", "Strategic"):
             txt += f" (d={robot_depth})"
 
     txt += f" | coups: {g.cursor}/{len(g.moves)}"
@@ -135,6 +142,7 @@ def serialize_state() -> Dict[str, Any]:
         "paused": g.paused,
         "robot_algo": robot_algo,
         "robot_depth": robot_depth,
+        "ai_starts": ai_starts,
         "match_score": {"R": match_score[RED], "Y": match_score[YELLOW]},
         "status_text": _status_text(),
         "moves": [
@@ -184,7 +192,6 @@ def _save_game_to_db_if_possible():
 
 def _save_online_game_to_db_if_possible(room: Dict[str, Any]):
     if not DB_AVAILABLE:
-        print("[ONLINE DB] DB unavailable")
         return
 
     try:
@@ -206,15 +213,7 @@ def _save_online_game_to_db_if_possible(room: Dict[str, Any]):
                 "color": m.color
             })
 
-        print("[ONLINE DB] save start")
-        print("[ONLINE DB] source =", source)
-        print("[ONLINE DB] seq =", seq)
-        print("[ONLINE DB] status =", status)
-        print("[ONLINE DB] winner =", winner)
-        print("[ONLINE DB] draw =", draw)
-        print("[ONLINE DB] moves_count =", len(moves_payload))
-
-        result = db.upsert_game_progress(
+        db.upsert_game_progress(
             source_filename=source,
             seq=seq,
             rows=g.rows,
@@ -226,11 +225,8 @@ def _save_online_game_to_db_if_possible(room: Dict[str, Any]):
             moves=moves_payload,
             confiance=2,
         )
-
-        print("[ONLINE DB] result =", result)
-
-    except Exception as e:
-        print("[ONLINE DB SAVE ERROR]", repr(e))
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -364,6 +360,91 @@ def _serialize_online_state(room: Dict[str, Any], player_token: str) -> Dict[str
 
 
 # ============================================================
+# PAINT HELPERS
+# ============================================================
+
+def _validate_painted_board(board_in: List[List[str]], rows_n: int, cols_n: int):
+    if rows_n <= 0 or cols_n <= 0:
+        raise HTTPException(400, "Grille vide")
+
+    for r in range(rows_n):
+        if len(board_in[r]) != cols_n:
+            raise HTTPException(400, "Grille non rectangulaire")
+
+    for r in range(rows_n):
+        for c in range(cols_n):
+            if board_in[r][c] not in (RED, YELLOW, EMPTY):
+                raise HTTPException(400, f"Cellule ({r},{c}) invalide : {board_in[r][c]}")
+
+    for c in range(cols_n):
+        seen_empty_below = False
+        for r in range(rows_n - 1, -1, -1):
+            cell = board_in[r][c]
+            if cell == EMPTY:
+                seen_empty_below = True
+            else:
+                if seen_empty_below:
+                    raise HTTPException(400, f"Grille invalide : pion flottant en colonne {c + 1}")
+
+
+def _infer_turn_from_board(board_in: List[List[str]], starting_color: str = RED) -> str:
+    r_count = sum(1 for row in board_in for cell in row if cell == RED)
+    y_count = sum(1 for row in board_in for cell in row if cell == YELLOW)
+
+    if starting_color == RED:
+        if r_count == y_count:
+            return RED
+        if r_count == y_count + 1:
+            return YELLOW
+    else:
+        if r_count == y_count:
+            return YELLOW
+        if y_count == r_count + 1:
+            return RED
+
+    raise HTTPException(
+        400,
+        f"Nombre de pions incohérent (R={r_count}, Y={y_count}) pour starting_color={starting_color}"
+    )
+
+
+def _detect_winner_on_board(board_in: List[List[str]]) -> Tuple[Optional[str], bool]:
+    rows_n = len(board_in)
+    cols_n = len(board_in[0]) if board_in else 0
+
+    def has4(color: str) -> bool:
+        for r in range(rows_n):
+            for c in range(cols_n):
+                if board_in[r][c] != color:
+                    continue
+                if c + 3 < cols_n and all(board_in[r][c + k] == color for k in range(4)):
+                    return True
+                if r + 3 < rows_n and all(board_in[r + k][c] == color for k in range(4)):
+                    return True
+                if r + 3 < rows_n and c + 3 < cols_n and all(board_in[r + k][c + k] == color for k in range(4)):
+                    return True
+                if r + 3 < rows_n and c - 3 >= 0 and all(board_in[r + k][c - k] == color for k in range(4)):
+                    return True
+        return False
+
+    red_win = has4(RED)
+    yellow_win = has4(YELLOW)
+
+    if red_win and yellow_win:
+        raise HTTPException(400, "Grille invalide : Rouge et Jaune gagnent simultanément")
+    if red_win:
+        return RED, False
+    if yellow_win:
+        return YELLOW, False
+
+    is_full = all(board_in[r][c] != EMPTY for r in range(rows_n) for c in range(cols_n))
+    if is_full:
+        return None, True
+
+    return None, False
+
+
+# ============================================================
 # Pydantic I/O
 # ============================================================
 
@@ -371,6 +452,7 @@ class SetIn(BaseModel):
     mode: Optional[int] = None
     robot_algo: Optional[str] = None
     robot_depth: Optional[int] = None
+    ai_starts: Optional[bool] = None
 
 
 class MoveIn(BaseModel):
@@ -408,6 +490,10 @@ class OnlineMoveIn(BaseModel):
     col: int
 
 
+class PaintBoardIn(BaseModel):
+    board: List[List[str]]
+
+
 # ============================================================
 # Routes API classiques
 # ============================================================
@@ -421,7 +507,9 @@ def api_state():
 def api_new():
     global game, cfg
     cfg = ensure_config()
+    current_mode = game.mode   # ← sauvegarder le mode avant reset
     game = Connect4(cfg["rows"], cfg["cols"], cfg["starting_color"])
+    game.mode = current_mode   # ← restaurer le mode
     _save_game_to_db_if_possible()
     return serialize_state()
 
@@ -434,7 +522,7 @@ def api_pause():
 
 @app.post("/api/set")
 def api_set(payload: SetIn):
-    global robot_algo, robot_depth
+    global robot_algo, robot_depth, ai_starts
 
     if payload.mode is not None:
         if payload.mode not in (0, 1, 2):
@@ -447,11 +535,16 @@ def api_set(payload: SetIn):
             robot_algo = "Random"
         elif ra in ("minimax", "mini"):
             robot_algo = "MiniMax"
+        elif ra in ("strategic", "strategique", "strat"):
+            robot_algo = "Strategic"
         else:
-            raise HTTPException(400, "robot_algo must be Random or MiniMax")
+            raise HTTPException(400, "robot_algo must be Random, MiniMax or Strategic")
 
     if payload.robot_depth is not None:
         robot_depth = max(1, min(int(payload.robot_depth), 8))
+
+    if payload.ai_starts is not None:
+        ai_starts = bool(payload.ai_starts)
 
     return serialize_state()
 
@@ -496,8 +589,14 @@ def api_step_ai():
         if not game.can_play() or game.finished:
             return serialize_state()
 
-        if game.mode == 1 and game.current_turn == RED:
-            raise HTTPException(400, "human turn (mode 1, RED)")
+        # Bloquer le tour humain selon ai_starts
+        # ai_starts=False → humain=Rouge, IA=Jaune  → bloquer si cur_turn==RED
+        # ai_starts=True  → humain=Jaune, IA=Rouge  → bloquer si cur_turn==YELLOW
+        if game.mode == 1:
+            if not ai_starts and game.current_turn == RED:
+                raise HTTPException(400, "human turn")
+            if ai_starts and game.current_turn == YELLOW:
+                raise HTTPException(400, "human turn")
 
         valid = game.valid_columns()
         if not valid:
@@ -506,30 +605,12 @@ def api_step_ai():
         if robot_algo == "Random":
             idx = int(time.time() * 1000) % len(valid)
             game.drop_in_column(valid[idx])
-            _save_game_to_db_if_possible()
-            return serialize_state()
+        else:
+            # MiniMax ou Strategic — on passe le mode à ai_engine
+            mode = "strategic" if robot_algo == "Strategic" else "minimax"
+            best_col = ai_choose_column_from_game(game, DB_AVAILABLE, robot_depth, mode=mode)
+            game.drop_in_column(best_col)
 
-        depth = max(1, min(int(robot_depth), 6))
-
-        cells = game.rows * game.cols
-        if cells >= 81:
-            depth = min(depth, 3)
-        elif cells >= 72:
-            depth = min(depth, 4)
-        elif cells >= 56:
-            depth = min(depth, 5)
-
-        scores: List[Optional[int]] = [None] * game.cols
-        tmp = [row[:] for row in game.board]
-
-        for c in range(game.cols):
-            if tmp[0][c] != EMPTY:
-                scores[c] = None
-            else:
-                scores[c] = minimax_score_for_column(tmp, c, depth, game.current_turn)
-
-        best = pick_best(scores)
-        game.drop_in_column(best)
         _save_game_to_db_if_possible()
         return serialize_state()
 
@@ -675,6 +756,129 @@ def api_bga_load_table(payload: BgaTableIn):
 
 
 # ============================================================
+# Prédiction
+# ============================================================
+
+@app.get("/api/predict")
+def api_predict():
+    g = game
+
+    if g.finished:
+        if g.draw:
+            return {"winner": "draw", "moves_left": 0, "explanation": "Partie terminée : égalité."}
+        return {"winner": g.winner, "moves_left": 0,
+                "explanation": f"Partie terminée : {COLOR_NAME[g.winner]} a gagné."}
+
+    ai = g.current_turn
+    opp = YELLOW if ai == RED else RED
+    tmp = [row[:] for row in g.board]
+
+    # Victoire immédiate ?
+    for c in range(g.cols):
+        if tmp[0][c] != EMPTY:
+            continue
+        r = None
+        for rr in range(g.rows - 1, -1, -1):
+            if tmp[rr][c] == EMPTY:
+                r = rr
+                break
+        if r is None:
+            continue
+        tmp[r][c] = ai
+        if _is_win(tmp, ai):
+            tmp[r][c] = EMPTY
+            return {"winner": ai, "moves_left": 1,
+                    "explanation": f"{COLOR_NAME[ai]} gagne au prochain coup."}
+        tmp[r][c] = EMPTY
+
+    max_depth = 8
+    found_forced = None
+    fallback_best_score = -10**18
+
+    for depth in range(2, max_depth + 1):
+        best_score = -10**18
+        for c in range(g.cols):
+            sc = minimax_score_for_column(tmp, c, depth, ai)
+            if sc is not None and sc > best_score:
+                best_score = sc
+        fallback_best_score = best_score
+
+        if best_score >= 9_000_000:
+            remaining = 10_000_000 - best_score
+            moves_left = max(1, depth - remaining)
+            found_forced = (ai, moves_left, depth, best_score)
+            break
+        if best_score <= -9_000_000:
+            remaining = 10_000_000 - abs(best_score)
+            moves_left = max(1, depth - remaining)
+            found_forced = (opp, moves_left, depth, best_score)
+            break
+
+    if found_forced is not None:
+        winner, moves_left, used_depth, raw_score = found_forced
+        approx_turns = max(1, (moves_left + 1) // 2)
+        return {"winner": winner, "moves_left": moves_left,
+                "explanation": f"{COLOR_NAME[winner]} gagne dans environ {approx_turns} tour(s)."}
+
+    if fallback_best_score > 5000:
+        return {"winner": ai, "moves_left": -1,
+                "explanation": f"{COLOR_NAME[ai]} est en avantage, sans gain forcé détecté."}
+    if fallback_best_score < -5000:
+        return {"winner": opp, "moves_left": -1,
+                "explanation": f"{COLOR_NAME[opp]} est en avantage, sans gain forcé détecté."}
+
+    return {"winner": "unknown", "moves_left": -1,
+            "explanation": "Aucun gain forcé détecté pour l'instant."}
+
+
+# ============================================================
+# Paint & reprise
+# ============================================================
+
+@app.post("/api/paint")
+def api_paint(payload: PaintBoardIn):
+    global game
+
+    board_in = payload.board
+    rows_n = len(board_in)
+    cols_n = len(board_in[0]) if board_in else 0
+
+    if rows_n != game.rows or cols_n != game.cols:
+        raise HTTPException(
+            400,
+            f"Grille {rows_n}x{cols_n} incompatible avec config {game.rows}x{game.cols}"
+        )
+
+    _validate_painted_board(board_in, rows_n, cols_n)
+
+    inferred_turn = _infer_turn_from_board(board_in, game.starting_color)
+    winner, draw = _detect_winner_on_board(board_in)
+
+    new_game = Connect4(rows_n, cols_n, game.starting_color)
+    new_game.mode = game.mode
+    new_game.board = [row[:] for row in board_in]
+    new_game.current_turn = inferred_turn
+    new_game.paused = False
+    new_game.moves = []
+    new_game.cursor = 0
+    new_game.finished = winner is not None or draw
+    new_game.winner = winner
+    new_game.draw = draw
+    new_game.winning_line = None
+
+    game = new_game
+    _save_game_to_db_if_possible()
+
+    data = serialize_state()
+    data["paint_analysis"] = {
+        "current_turn_inferred": inferred_turn,
+        "red_name": COLOR_NAME[RED],
+        "yellow_name": COLOR_NAME[YELLOW],
+    }
+    return data
+
+
+# ============================================================
 # Routes API online
 # ============================================================
 
@@ -753,10 +957,7 @@ def api_online_move(payload: OnlineMoveIn):
         raise HTTPException(400, "invalid move")
 
     room["updated_at"] = time.time()
-    if g.finished:
-        room["status"] = "finished"
-    else:
-        room["status"] = "playing"
+    room["status"] = "finished" if g.finished else "playing"
 
     _save_online_game_to_db_if_possible(room)
 
