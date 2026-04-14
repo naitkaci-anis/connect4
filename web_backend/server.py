@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 import json
 import secrets
@@ -71,7 +71,7 @@ game.mode = 2  # 0/1/2
 robot_algo: str = "Random"
 robot_algo_r: str = "Random"   # mode 0 : robot jouant Rouge
 robot_algo_y: str = "MiniMax"  # mode 0 : robot jouant Jaune
-robot_depth: int = 7
+robot_depth: int = 4
 ai_starts: bool = False
 
 match_score = {RED: 0, YELLOW: 0}
@@ -169,11 +169,14 @@ def _save_game_to_db_if_possible():
         return
 
     g = game
+    if not g.finished:
+        return
+
     source = f"web_game_{g.game_index}"
     seq = ",".join(str(m.col + 1) for m in g.moves[: g.cursor])
-    status = "FINISHED" if g.finished else "IN_PROGRESS"
-    winner = g.winner if (g.finished and not g.draw) else None
-    draw = bool(g.draw) if g.finished else False
+    status = "FINISHED"
+    winner = g.winner if not g.draw else None
+    draw = bool(g.draw)
 
     moves_payload = []
     for i, m in enumerate(g.moves[: g.cursor], start=1):
@@ -199,7 +202,6 @@ def _save_game_to_db_if_possible():
         )
     except Exception:
         pass
-
 
 def _save_online_game_to_db_if_possible(room: Dict[str, Any]):
     if not DB_AVAILABLE:
@@ -488,6 +490,10 @@ class ConfigIn(BaseModel):
     drop_delay_ms: int
 
 
+class BgaTableIn(BaseModel):
+    table_id: int
+
+
 class OnlineJoinIn(BaseModel):
     pass
 
@@ -725,6 +731,51 @@ def api_db_load(game_id: int):
     _save_game_to_db_if_possible()
     return serialize_state()
 
+
+@app.post("/api/bga/load_table")
+def api_bga_load_table(payload: BgaTableIn):
+    global game
+
+    table_id = int(payload.table_id)
+    if table_id <= 0:
+        raise HTTPException(400, "table_id invalide")
+
+    try:
+        from .bga_single_table import load_bga_table
+    except Exception:
+        try:
+            from bga_single_table import load_bga_table
+        except Exception as e:
+            raise HTTPException(500, f"Module BGA introuvable: {e}")
+
+    try:
+        data = load_bga_table(table_id)
+    except Exception as e:
+        raise HTTPException(400, f"Impossible de charger la table BGA {table_id}: {e}")
+
+    rows = int(data["rows"])
+    cols = int(data["cols"])
+    starting_color = data.get("starting_color", "R")
+    raw_moves = data.get("moves", [])
+
+    if not raw_moves:
+        raise HTTPException(400, "Aucun coup récupéré pour cette table")
+
+    current_mode = game.mode
+    game = Connect4(rows, cols, starting_color)
+    game.mode = current_mode
+
+    game.moves = []
+    for i, mv in enumerate(raw_moves, start=1):
+        col = int(mv["col"])
+        ok = game.drop_in_column(col)
+        if not ok:
+            raise HTTPException(400, f"Coup invalide au ply {i} (col={col})")
+
+    _save_game_to_db_if_possible()
+    return serialize_state()
+
+
 # ============================================================
 # Hint — meilleur coup pour l'humain (MiniMax)
 # ============================================================
@@ -741,7 +792,7 @@ def api_hint():
         return {"best_col": None, "scores": [], "current_turn": None,
                 "min_score": 0, "max_score": 0}
 
-    depth = min(robot_depth, 5)   # cap à 5 pour la vitesse
+    depth = min(robot_depth, 3)   
     tmp = [row[:] for row in g.board]
     scores: List[Optional[int]] = []
 
