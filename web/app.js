@@ -100,12 +100,11 @@ let lastConsoleSignature = null;
 let gameStarted = false; // bloque l'autoplay jusqu'au clic sur ▶ Start
 
 // ============================================================
-// NEURAL EVAL AUTO
+// NEURAL EVAL AUTO — prédiction neuronale après chaque coup
 // ============================================================
 let _lastNeuralCursor = -1;
 
 async function neuralEvalUpdate(cursor) {
-    // Ne refaire l'appel que si le curseur a changé
     if (cursor === _lastNeuralCursor) return;
     _lastNeuralCursor = cursor;
 
@@ -119,9 +118,8 @@ async function neuralEvalUpdate(cursor) {
     try {
         const d = await api("/api/neural_eval");
 
-        // Calcul des pourcentages (v_red ∈ -1..+1)
         const v = (d.value !== null && d.value !== undefined) ? d.value : 0;
-        const rPct = Math.round(50 + v * 45); // 5..95
+        const rPct = Math.round(50 + v * 45);
         const yPct = 100 - rPct;
 
         if (barR) barR.style.width = rPct + "%";
@@ -159,6 +157,124 @@ async function neuralEvalUpdate(cursor) {
 }
 
 // ============================================================
+// HINT — meilleur coup pour le joueur humain
+// ============================================================
+let _lastHintCursor = -2;
+let _hintData = null;
+
+async function hintUpdate(st) {
+    const panel = document.getElementById("hintPanel");
+    if (!panel) return;
+
+    // Cacher si partie terminée, mode IA vs IA, ou mode en ligne
+    if (!st || st.finished || onlineMode || st.mode === 0) {
+        panel.style.display = "none";
+        return;
+    }
+
+    // Visible uniquement quand c'est le tour d'un humain
+    const isHumanTurn =
+        st.mode === 2 ||
+        (st.mode === 1 && !aiStarts() && st.current_turn === "R") ||
+        (st.mode === 1 && aiStarts() && st.current_turn === "Y");
+
+    if (!isHumanTurn) {
+        panel.style.display = "none";
+        return;
+    }
+
+    panel.style.display = "block";
+
+    // Ne recalcule que si le plateau a changé
+    if (st.cursor === _lastHintCursor && _hintData) {
+        _renderHint(st);
+        return;
+    }
+    _lastHintCursor = st.cursor;
+
+    const sub = document.getElementById("hintSub");
+    if (sub) sub.textContent = "Analyse en cours…";
+
+    try {
+        _hintData = await api("/api/hint");
+        _renderHint(st);
+    } catch (e) {
+        if (sub) sub.textContent = "Erreur d'analyse.";
+    }
+}
+
+function _renderHint(st) {
+    if (!_hintData) return;
+
+    const { best_col, scores, min_score, max_score } = _hintData;
+    const isRed = st.current_turn === "R";
+    const accentColor = isRed ? "#ff6b6b" : "#ffe46b";
+
+    // ── Titre — colonne recommandée ──
+    const bestEl = document.getElementById("hintBestCol");
+    if (bestEl) {
+        bestEl.textContent = best_col !== null ? `⭐ Joue colonne ${best_col + 1}` : "—";
+        bestEl.style.color = accentColor;
+    }
+    const sub = document.getElementById("hintSub");
+    if (sub) sub.textContent = "Recommandation MiniMax";
+
+    // ── Barres par colonne ──
+    const barsEl = document.getElementById("hintColBars");
+    const labelsEl = document.getElementById("hintColLabels");
+    if (!barsEl || !labelsEl) return;
+
+    barsEl.innerHTML = "";
+    labelsEl.innerHTML = "";
+
+    const range = (max_score - min_score) || 1;
+
+    for (let c = 0; c < scores.length; c++) {
+        const sc = scores[c];
+        const isBest = c === best_col;
+
+        // Barre
+        const bar = document.createElement("div");
+        bar.className = "hint-bar";
+
+        if (sc === null) {
+            // Colonne pleine
+            bar.style.height = "4px";
+            bar.style.background = "#1e1e2e";
+        } else {
+            const h = Math.max(4, Math.round(((sc - min_score) / range) * 50));
+            bar.style.height = h + "px";
+
+            if (isBest) {
+                bar.style.background = accentColor;
+                bar.style.boxShadow = `0 0 10px ${accentColor}99`;
+            } else if (sc >= 9000000) {
+                // Victoire forcée
+                bar.style.background = "rgba(60,210,120,0.9)";
+            } else if (sc > 50000) {
+                bar.style.background = "rgba(60,210,120,0.65)";
+            } else if (sc <= -9000000) {
+                // Défaite forcée
+                bar.style.background = "rgba(230,80,80,0.9)";
+            } else if (sc < -50000) {
+                bar.style.background = "rgba(230,80,80,0.50)";
+            } else {
+                bar.style.background = "rgba(120,150,255,0.45)";
+            }
+        }
+        barsEl.appendChild(bar);
+
+        // Label numéro de colonne
+        const lbl = document.createElement("div");
+        lbl.className = "hint-col-lbl";
+        lbl.textContent = String(c + 1);
+        lbl.style.color = isBest ? accentColor : "#555";
+        lbl.style.fontWeight = isBest ? "900" : "400";
+        labelsEl.appendChild(lbl);
+    }
+}
+
+// ============================================================
 // Helpers
 // ============================================================
 function aiStarts() {
@@ -181,8 +297,6 @@ function updateRobotVisibility() {
 function updateDepthVisibility() {
     if (!depthGroup) return;
     const mode = modeEl ? Number(modeEl.value) : 1;
-    // Mode IA vs IA : visible seulement si au moins un des deux robots est MiniMax
-    // Autres modes : visible seulement si le robot est MiniMax
     let needDepth = false;
     if (mode === 0) {
         needDepth = robotAlgoR() === "minimax" || robotAlgoY() === "minimax";
@@ -192,10 +306,9 @@ function updateDepthVisibility() {
     depthGroup.style.display = needDepth ? "flex" : "none";
 }
 
-// Convertit la valeur du select robot vers la valeur serveur
 function robotAlgoValue() {
     if (!robotEl) return "random";
-    return robotEl.value; // "random" | "minimax" | "neural"
+    return robotEl.value;
 }
 
 function robotAlgoR() { return robotREl ? robotREl.value : "random"; }
@@ -243,6 +356,7 @@ function startOnlinePolling() {
         try { await refresh(); } catch (e) { console.error("online polling failed:", e); }
     }, 1500);
 }
+
 async function joinOnlineMatch() {
     const data = await api("/api/online/join", "POST", {});
     onlineMode = true;
@@ -264,6 +378,7 @@ async function joinOnlineMatch() {
     startOnlinePolling();
     await refresh();
 }
+
 async function refreshOnline() {
     if (!onlineRoomId || !onlinePlayerToken) throw new Error("Session online incomplète");
     state = await api(
@@ -272,6 +387,7 @@ async function refreshOnline() {
     if (modeEl) modeEl.value = "3";
     render();
 }
+
 async function playOnlineMove(col) {
     if (!onlineRoomId || !onlinePlayerToken) throw new Error("Session online incomplète");
     await api("/api/online/move", "POST", { room_id: onlineRoomId, player_token: onlinePlayerToken, col });
@@ -395,6 +511,7 @@ function renderWinnerModal() {
 function render() {
     if (!state) return;
     buildColNums(state.cols);
+
     let statusText = state.status_text;
     if (onlineMode && onlineColor)
         statusText = `[Online] Tu es ${onlineColor === "R" ? "Rouge" : "Jaune"} • ${state.status_text}`;
@@ -402,22 +519,23 @@ function render() {
     setText(robotTxt, state.robot_algo || "-");
     setText(movesTxt, `${state.cursor}/${state.total}`);
     setText(progressTxt, `${state.cursor}/${state.total}`);
+
     const totalSlots = state.rows * state.cols;
     if (progressFill) progressFill.style.width = `${(state.cursor / Math.max(1, totalSlots)) * 100}%`;
+
     if (state.match_score) {
         setText(scoreR, String(state.match_score.R));
         setText(scoreY, String(state.match_score.Y));
     }
+
     if (!boardEl) return;
 
     const winSet = new Set();
     if (state.winning_line) {
-        console.log("🏆 winning_line:", state.winning_line);
         for (const [wr, wc] of state.winning_line) winSet.add(`${wr},${wc}`);
     }
 
     const lastMove = (state.moves && state.cursor > 0) ? state.moves[state.cursor - 1] : null;
-    if (lastMove) console.log("🎯 last-move:", lastMove.row, lastMove.col);
 
     boardEl.innerHTML = "";
     boardEl.style.gridTemplateColumns = `repeat(${state.cols}, var(--cell))`;
@@ -450,8 +568,11 @@ function render() {
     renderWinnerModal();
     updateGhost();
 
-    // Prédiction neuronale auto
+    // ── Prédiction neuronale automatique ──
     neuralEvalUpdate(state.cursor);
+
+    // ── Hint meilleur coup (humain seulement) ──
+    hintUpdate(state);
 }
 
 // ============================================================
@@ -465,14 +586,12 @@ async function refresh() {
             state = await api("/api/state");
             if (modeEl) modeEl.value = String(state.mode);
 
-            // Synchroniser le select Robot avec l'état serveur
             if (robotEl) {
                 const ra = (state.robot_algo || "").toLowerCase();
                 if (ra === "neural") robotEl.value = "neural";
                 else if (ra === "minimax") robotEl.value = "minimax";
                 else robotEl.value = "random";
             }
-            // Synchroniser les selects Robot Rouge / Robot Jaune (mode IA vs IA)
             if (robotREl && state.robot_algo_r) {
                 const ra = state.robot_algo_r.toLowerCase();
                 robotREl.value = ra === "neural" ? "neural" : ra === "minimax" ? "minimax" : "random";
@@ -481,13 +600,9 @@ async function refresh() {
                 const ra = state.robot_algo_y.toLowerCase();
                 robotYEl.value = ra === "neural" ? "neural" : ra === "minimax" ? "minimax" : "random";
             }
-
             if (depthEl) depthEl.value = String(state.robot_depth);
-
-            // Synchroniser le select "IA commence" depuis l'état serveur
-            if (aiStartsEl && state.ai_starts !== undefined) {
+            if (aiStartsEl && state.ai_starts !== undefined)
                 aiStartsEl.value = state.ai_starts ? "true" : "false";
-            }
 
             updateAiStartsVisibility();
             updateRobotVisibility();
@@ -506,7 +621,7 @@ async function refresh() {
 // ============================================================
 async function onColClick(col) {
     try {
-        if (!gameStarted) return; // ◀ bloqué jusqu'au ▶ Start
+        if (!gameStarted) return;
         if (onlineMode) { await playOnlineMove(col); return; }
         if (!state || state.finished || state.paused) return;
 
@@ -572,7 +687,7 @@ function _needsAI() {
 }
 
 async function maybeAutoplay() {
-    if (!gameStarted) return; // ◀ bloqué jusqu'au Start
+    if (!gameStarted) return;
     if (autoplayRunning) return;
     if (!_needsAI()) return;
     autoplayRunning = true;
@@ -591,7 +706,7 @@ async function maybeAutoplay() {
 }
 
 // ============================================================
-// AI THINKING BAR — courbe exponentielle cohérente
+// AI THINKING BAR
 // ============================================================
 function showAiThinking(depthHint) {
     if (!aiThinkingBar) return;
@@ -621,7 +736,6 @@ function hideAiThinking() {
 // ============================================================
 // EVENTS
 // ============================================================
-// Nouvelle partie — réinitialise le plateau seulement (sans lancer l'autoplay)
 on(btnNew, "click", async() => {
     stopAutoplay();
     gameStarted = false;
@@ -636,11 +750,12 @@ on(btnNew, "click", async() => {
     pushConsoleMessage("Plateau réinitialisé. Appuie sur ▶ Start pour commencer.", "info");
     await api("/api/new", "POST");
     hoveredCol = null;
+    // Reset hint
+    _lastHintCursor = -2;
+    _hintData = null;
     await refresh();
-    // Pas de maybeAutoplay() ici — on attend le bouton Start
 });
 
-// Start — lance la partie (autoplay IA)
 on(btnStart, "click", async() => {
     if (onlineMode) return;
     gameStarted = true;
@@ -708,20 +823,15 @@ on(aiStartsEl, "change", async() => {
     if (onlineMode) return;
     stopAutoplay();
     lastFinishedSignature = null;
-
-    // 1) Envoyer ai_starts au serveur
     const val = aiStartsEl ? aiStartsEl.value === "true" : false;
     await api("/api/set", "POST", { ai_starts: val });
-
-    // 2) Nouvelle partie pour appliquer
     await api("/api/new", "POST");
     hoveredCol = null;
-
     await refresh();
     await maybeAutoplay();
 });
 
-// Changement de robot (mode 1 — un seul robot)
+// Changement de robot (mode 1)
 on(robotEl, "change", async() => {
     if (onlineMode) return;
     stopAutoplay();
@@ -731,7 +841,7 @@ on(robotEl, "change", async() => {
     await maybeAutoplay();
 });
 
-// Changement de Robot Rouge (mode 0 — IA vs IA)
+// Changement Robot Rouge (mode 0)
 on(robotREl, "change", async() => {
     if (onlineMode) return;
     stopAutoplay();
@@ -741,7 +851,7 @@ on(robotREl, "change", async() => {
     await maybeAutoplay();
 });
 
-// Changement de Robot Jaune (mode 0 — IA vs IA)
+// Changement Robot Jaune (mode 0)
 on(robotYEl, "change", async() => {
     if (onlineMode) return;
     stopAutoplay();
@@ -793,7 +903,7 @@ on(btnLoadDb, "click", async() => {
         const games = data.games || [];
         if (!games.length) { alert("Aucune partie enregistrée."); return; }
         const last = games.slice(0, 15).map(g =>
-            `#${g.id} | ${g.status} | seq=${(g.original_sequence||"").slice(0,25)} | src=${g.source_filename||""}`
+            `#${g.id} | ${g.status} | seq=${(g.original_sequence || "").slice(0, 25)} | src=${g.source_filename || ""}`
         ).join("\n");
         const idStr = prompt("Choisis l'ID d'une partie à charger.\n\nDernières parties:\n" + last);
         if (!idStr) return;
@@ -842,14 +952,15 @@ on(btnNewFromWinner, "click", async() => {
     lastFinishedSignature = null;
     await api("/api/new", "POST");
     hoveredCol = null;
+    _lastHintCursor = -2;
+    _hintData = null;
     clearConsole();
     pushConsoleMessage("Plateau réinitialisé. Appuie sur ▶ Start pour commencer.", "info");
     await refresh();
-    // Pas de maybeAutoplay() — attendre btnStart
 });
 
 // ============================================================
-// PREDICTION
+// PREDICTION — bouton 🔮 Prédire (MiniMax)
 // ============================================================
 const predictPanel = document.getElementById("predictPanel");
 const predictLoading = document.getElementById("predictLoading");
@@ -861,7 +972,6 @@ const predictPct = document.getElementById("predictPct");
 
 on(btnPredict, "click", async() => {
     if (!predictPanel) return;
-    // Afficher le panel en mode loading
     predictPanel.style.display = "block";
     if (predictLoading) predictLoading.style.display = "flex";
     if (predictResult) predictResult.style.display = "none";
@@ -877,7 +987,6 @@ on(btnPredict, "click", async() => {
         const isDraw = data.winner === "draw";
         const colorName = isR ? "Rouge 🔴" : isY ? "Jaune 🟡" : null;
 
-        // Titre gagnant
         if (colorName) {
             predictWinner.textContent = colorName + " va gagner";
             predictWinner.style.color = isR ? "#ff6b6b" : "#ffe46b";
@@ -889,7 +998,6 @@ on(btnPredict, "click", async() => {
             predictWinner.style.color = "#b8c7ee";
         }
 
-        // Détail texte
         let detail = "";
         if (data.finished) {
             detail = "La partie est terminée.";
@@ -897,7 +1005,7 @@ on(btnPredict, "click", async() => {
             const turns = Math.max(1, Math.ceil(data.moves_left / 2));
             detail = `Victoire forcée détectée en <strong>${data.moves_left} coup(s)</strong> — soit environ <strong>${turns} tour(s)</strong>.`;
         } else if (colorName) {
-            detail = `<strong>${colorName.split(" ")[0]}</strong> a un avantage stratégique clair, sans gain immédiat forcé détecté.`;
+            detail = `<strong>${colorName.split(" ")[0]}</strong> a un avantage stratégique clair.`;
         } else if (isDraw) {
             detail = "Aucun des deux joueurs n'a d'avantage décisif détecté.";
         } else {
@@ -905,15 +1013,12 @@ on(btnPredict, "click", async() => {
         }
         predictDetail.innerHTML = detail;
 
-        // Barre d'avantage — basée sur le vrai score minimax
         let pct = 50;
         if (data.winner === "R" && data.moves_left > 0) {
-            // Victoire forcée Rouge : plus c'est proche, plus la barre est à droite
             pct = Math.min(95, 75 + (10 - Math.min(data.moves_left, 10)) * 2);
         } else if (data.winner === "Y" && data.moves_left > 0) {
             pct = Math.max(5, 25 - (10 - Math.min(data.moves_left, 10)) * 2);
         } else if (data.score !== undefined && data.score !== 0) {
-            // Score réel : on normalise entre 5% et 95%
             const clamped = Math.max(-500000, Math.min(500000, data.score));
             pct = Math.round(50 + (clamped / 500000) * 45);
             pct = Math.max(5, Math.min(95, pct));
@@ -927,9 +1032,10 @@ on(btnPredict, "click", async() => {
                 pct < 45 ? "linear-gradient(90deg,#b58a00,#ffe46b)" :
                 "linear-gradient(90deg,#378ADD,#1a4fa0)";
         }
-        const rPct = pct;
-        const yPct = 100 - pct;
-        if (predictPct) predictPct.textContent = pct > 55 ? `Rouge ${rPct}%` : pct < 45 ? `Jaune ${yPct}%` : `Équilibré 50/50`;
+        const rPct = pct,
+            yPct = 100 - pct;
+        if (predictPct) predictPct.textContent =
+            pct > 55 ? `Rouge ${rPct}%` : pct < 45 ? `Jaune ${yPct}%` : `Équilibré 50/50`;
 
     } catch (e) {
         if (predictLoading) predictLoading.style.display = "none";
@@ -941,6 +1047,7 @@ on(btnPredict, "click", async() => {
         if (predictDetail) predictDetail.innerHTML = e.message || "Erreur inconnue.";
     }
 });
+
 on(btnClosePrediction, "click", () => {
     if (predictPanel) predictPanel.style.display = "none";
 });
@@ -969,6 +1076,7 @@ function buildPaintBoard(rows, cols) {
         }
     }
 }
+
 on(btnPaint, "click", () => {
     if (!state || !paintModal) return;
     buildPaintBoard(state.rows, state.cols);
