@@ -57,8 +57,6 @@ const btnPrev = document.getElementById("btnPrev");
 const btnNext = document.getElementById("btnNext");
 const btnLoadDb = document.getElementById("btnLoadDb");
 const btnSettings = document.getElementById("btnSettings");
-const bgaTableIdEl = document.getElementById("bgaTableId");
-const btnImportBga = document.getElementById("btnImportBga");
 const statusLeft = document.getElementById("statusLeft");
 const robotTxt = document.getElementById("robotTxt");
 const movesTxt = document.getElementById("movesTxt");
@@ -871,30 +869,6 @@ on(depthEl, "change", async() => {
 });
 
 // Import BGA
-async function doImportBga() {
-    try {
-        const raw = bgaTableIdEl ? bgaTableIdEl.value.trim() : "";
-        if (!raw) { alert("Saisis un numéro de table BGA."); return; }
-        const tableId = Number(raw);
-        if (!Number.isFinite(tableId) || tableId <= 0) { alert("Numéro de table invalide."); return; }
-        stopAutoplay();
-        onlineMode = false;
-        onlineRoomId = null;
-        onlinePlayerToken = null;
-        onlineColor = null;
-        stopOnlinePolling();
-        lastConsoleSignature = null;
-        lastFinishedSignature = null;
-        clearConsole();
-        pushConsoleMessage(`Import de la table BGA ${tableId}...`, "info");
-        await api("/api/bga/load_table", "POST", { table_id: tableId });
-        hoveredCol = null;
-        await refresh();
-        await maybeAutoplay();
-    } catch (e) { alert("Impossible d'importer la table BGA.\n" + e.message); }
-}
-on(btnImportBga, "click", doImportBga);
-on(bgaTableIdEl, "keydown", async(ev) => { if (ev.key === "Enter") await doImportBga(); });
 
 // Parties précédentes (DB)
 on(btnLoadDb, "click", async() => {
