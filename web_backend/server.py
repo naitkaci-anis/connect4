@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
 import json
@@ -11,6 +11,15 @@ import threading
 from typing import Any, Dict, Optional, List, Tuple
 
 from ai_engine import ai_choose_column_from_game
+
+# ── MODIFICATION 1 : Import NeuralAI ──
+try:
+    from neural_ai import ai_choose_column_neural
+    NEURAL_AVAILABLE = True
+    print("✅  NeuralAI disponible")
+except Exception as e:
+    NEURAL_AVAILABLE = False
+    print(f"⚠️  NeuralAI non disponible : {e}")
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,13 +69,14 @@ game: Connect4 = Connect4(cfg["rows"], cfg["cols"], cfg["starting_color"])
 game.mode = 2  # 0/1/2
 
 robot_algo: str = "Random"
-robot_depth: int = 7          # ← profondeur augmentée
-ai_starts: bool = False       # True = IA joue Rouge (commence en premier)
+robot_algo_r: str = "Random"   # mode 0 : robot jouant Rouge
+robot_algo_y: str = "MiniMax"  # mode 0 : robot jouant Jaune
+robot_depth: int = 7
+ai_starts: bool = False
 
 match_score = {RED: 0, YELLOW: 0}
 _counted_games: Dict[int, str] = {}
 
-# verrou anti appels IA simultanés
 ai_step_lock = threading.Lock()
 
 # ---------------------------
@@ -141,6 +151,8 @@ def serialize_state() -> Dict[str, Any]:
         "mode": g.mode,
         "paused": g.paused,
         "robot_algo": robot_algo,
+        "robot_algo_r": robot_algo_r,
+        "robot_algo_y": robot_algo_y,
         "robot_depth": robot_depth,
         "ai_starts": ai_starts,
         "match_score": {"R": match_score[RED], "Y": match_score[YELLOW]},
@@ -158,7 +170,6 @@ def _save_game_to_db_if_possible():
 
     g = game
     source = f"web_game_{g.game_index}"
-
     seq = ",".join(str(m.col + 1) for m in g.moves[: g.cursor])
     status = "FINISHED" if g.finished else "IN_PROGRESS"
     winner = g.winner if (g.finished and not g.draw) else None
@@ -197,7 +208,6 @@ def _save_online_game_to_db_if_possible(room: Dict[str, Any]):
     try:
         g: Connect4 = room["game"]
         room_id = room["room_id"]
-
         source = f"online_room_{room_id}"
         seq = ",".join(str(m.col + 1) for m in g.moves[: g.cursor])
         status = "FINISHED" if g.finished else "IN_PROGRESS"
@@ -451,6 +461,8 @@ def _detect_winner_on_board(board_in: List[List[str]]) -> Tuple[Optional[str], b
 class SetIn(BaseModel):
     mode: Optional[int] = None
     robot_algo: Optional[str] = None
+    robot_algo_r: Optional[str] = None
+    robot_algo_y: Optional[str] = None
     robot_depth: Optional[int] = None
     ai_starts: Optional[bool] = None
 
@@ -507,9 +519,9 @@ def api_state():
 def api_new():
     global game, cfg
     cfg = ensure_config()
-    current_mode = game.mode   # ← sauvegarder le mode avant reset
+    current_mode = game.mode
     game = Connect4(cfg["rows"], cfg["cols"], cfg["starting_color"])
-    game.mode = current_mode   # ← restaurer le mode
+    game.mode = current_mode
     _save_game_to_db_if_possible()
     return serialize_state()
 
@@ -522,27 +534,30 @@ def api_pause():
 
 @app.post("/api/set")
 def api_set(payload: SetIn):
-    global robot_algo, robot_depth, ai_starts
+    global robot_algo, robot_algo_r, robot_algo_y, robot_depth, ai_starts
 
     if payload.mode is not None:
         if payload.mode not in (0, 1, 2):
             raise HTTPException(400, "mode must be 0,1,2")
         game.mode = payload.mode
 
+    def _parse_algo(ra: str) -> str:
+        ra = ra.lower()
+        if ra in ("random", "rand"):        return "Random"
+        if ra in ("minimax", "mini"):       return "MiniMax"
+        if ra in ("strategic", "strat"):    return "Strategic"
+        if ra in ("neural", "neuralai", "ia", "reseau"): return "Neural"
+        raise HTTPException(400, f"robot_algo inconnu : {ra}")
+
     if payload.robot_algo is not None:
-        ra = payload.robot_algo.lower()
-        if ra in ("random", "rand"):
-            robot_algo = "Random"
-        elif ra in ("minimax", "mini"):
-            robot_algo = "MiniMax"
-        elif ra in ("strategic", "strategique", "strat"):
-            robot_algo = "Strategic"
-        else:
-            raise HTTPException(400, "robot_algo must be Random, MiniMax or Strategic")
+        robot_algo = _parse_algo(payload.robot_algo)
+    if payload.robot_algo_r is not None:
+        robot_algo_r = _parse_algo(payload.robot_algo_r)
+    if payload.robot_algo_y is not None:
+        robot_algo_y = _parse_algo(payload.robot_algo_y)
 
     if payload.robot_depth is not None:
         robot_depth = max(1, min(int(payload.robot_depth), 8))
-
     if payload.ai_starts is not None:
         ai_starts = bool(payload.ai_starts)
 
@@ -589,9 +604,6 @@ def api_step_ai():
         if not game.can_play() or game.finished:
             return serialize_state()
 
-        # Bloquer le tour humain selon ai_starts
-        # ai_starts=False → humain=Rouge, IA=Jaune  → bloquer si cur_turn==RED
-        # ai_starts=True  → humain=Jaune, IA=Rouge  → bloquer si cur_turn==YELLOW
         if game.mode == 1:
             if not ai_starts and game.current_turn == RED:
                 raise HTTPException(400, "human turn")
@@ -602,13 +614,24 @@ def api_step_ai():
         if not valid:
             return serialize_state()
 
-        if robot_algo == "Random":
+        # En mode IA vs IA, choisir l'algo selon la couleur qui joue
+        if game.mode == 0:
+            algo = robot_algo_r if game.current_turn == RED else robot_algo_y
+        else:
+            algo = robot_algo
+
+        if algo == "Random":
             idx = int(time.time() * 1000) % len(valid)
             game.drop_in_column(valid[idx])
+        elif algo == "Neural" and NEURAL_AVAILABLE:
+            best_col = ai_choose_column_neural(game)
+            game.drop_in_column(best_col)
+        elif algo == "Neural" and not NEURAL_AVAILABLE:
+            best_col = ai_choose_column_from_game(game, DB_AVAILABLE, robot_depth, mode="minimax")
+            game.drop_in_column(best_col)
         else:
-            # MiniMax ou Strategic — on passe le mode à ai_engine
-            mode = "strategic" if robot_algo == "Strategic" else "minimax"
-            best_col = ai_choose_column_from_game(game, DB_AVAILABLE, robot_depth, mode=mode)
+            mode_str = "strategic" if algo == "Strategic" else "minimax"
+            best_col = ai_choose_column_from_game(game, DB_AVAILABLE, robot_depth, mode=mode_str)
             game.drop_in_column(best_col)
 
         _save_game_to_db_if_possible()
@@ -687,9 +710,7 @@ def api_db_load(game_id: int):
         raise HTTPException(400, "DB non disponible")
 
     data = db.get_game_for_app(int(game_id))
-
     current_mode = game.mode
-
     rows = int(data["rows"])
     cols = int(data["cols"])
     start = data["starting_color"]
@@ -698,7 +719,6 @@ def api_db_load(game_id: int):
     game.mode = current_mode
 
     import time as _t
-
     game.moves = []
     for mv in data["moves"]:
         game.moves.append(
@@ -740,7 +760,6 @@ def api_bga_load_table(payload: BgaTableIn):
         raise HTTPException(400, "Aucun coup récupéré pour cette table")
 
     current_mode = game.mode
-
     game = Connect4(rows, cols, starting_color)
     game.mode = current_mode
 
@@ -754,7 +773,61 @@ def api_bga_load_table(payload: BgaTableIn):
     _save_game_to_db_if_possible()
     return serialize_state()
 
+@app.get("/api/neural_eval")
+def api_neural_eval():
+    """Évaluation rapide par la tête value du réseau neuronal."""
+    g = game
 
+    if g.finished:
+        if g.draw:
+            return {"label": "nul", "value": 0.0, "confidence": 100,
+                    "color_wins": None, "explanation": "Partie terminée : égalité."}
+        return {"label": "victoire", "value": 1.0 if g.winner == RED else -1.0,
+                "confidence": 100, "color_wins": g.winner,
+                "explanation": f"Partie terminée : {COLOR_NAME[g.winner]} a gagné."}
+
+    if not NEURAL_AVAILABLE:
+        return {"label": "unavailable", "value": 0.0, "confidence": 0,
+                "color_wins": None, "explanation": "Modèle neural non disponible."}
+
+    try:
+        import torch
+        from neural_ai import NeuralAI
+        ai_inst = NeuralAI.get_instance()
+        if ai_inst is None:
+            return {"label": "unavailable", "value": 0.0, "confidence": 0,
+                    "color_wins": None, "explanation": "connect4_model.pt introuvable."}
+
+        turn = g.current_turn
+        tensor = ai_inst._board_to_tensor(g.board, turn)
+        with torch.no_grad():
+            _, val_t = ai_inst.model(tensor.to(ai_inst.device))
+        v = float(val_t.item())          # -1..+1 du point de vue du joueur courant
+        v_red = v if turn == RED else -v  # ramené en perspective Rouge
+
+        conf = int(abs(v) * 100)
+        opp = YELLOW if turn == RED else RED
+
+        if v > 0.45:
+            label, color_wins = "victoire", turn
+            expl = f"L'IA prédit une victoire de {COLOR_NAME[turn]}. (confiance {conf}%)"
+        elif v < -0.45:
+            label, color_wins = "defaite", opp
+            expl = f"L'IA prédit une victoire de {COLOR_NAME[opp]}. (confiance {conf}%)"
+        elif abs(v) < 0.15:
+            label, color_wins = "nul", None
+            expl = f"L'IA prédit un match nul. (confiance {conf}%)"
+        else:
+            label, color_wins = "incertain", None
+            expl = f"Position incertaine. (valeur {v:+.2f})"
+
+        return {"label": label, "value": round(v_red, 3),
+                "confidence": conf, "color_wins": color_wins,
+                "current_turn": turn, "explanation": expl}
+
+    except Exception as e:
+        return {"label": "error", "value": 0.0, "confidence": 0,
+                "color_wins": None, "explanation": str(e)}
 # ============================================================
 # Prédiction
 # ============================================================
@@ -773,7 +846,6 @@ def api_predict():
     opp = YELLOW if ai == RED else RED
     tmp = [row[:] for row in g.board]
 
-    # Victoire immédiate ?
     for c in range(g.cols):
         if tmp[0][c] != EMPTY:
             continue
@@ -791,44 +863,49 @@ def api_predict():
                     "explanation": f"{COLOR_NAME[ai]} gagne au prochain coup."}
         tmp[r][c] = EMPTY
 
-    max_depth = 8
+    max_depth = 6
     found_forced = None
     fallback_best_score = -10**18
+    deadline = time.time() + 1.5
 
     for depth in range(2, max_depth + 1):
         best_score = -10**18
         for c in range(g.cols):
+            if time.time() > deadline:
+                break
             sc = minimax_score_for_column(tmp, c, depth, ai)
             if sc is not None and sc > best_score:
                 best_score = sc
         fallback_best_score = best_score
 
         if best_score >= 9_000_000:
-            remaining = 10_000_000 - best_score
-            moves_left = max(1, depth - remaining)
-            found_forced = (ai, moves_left, depth, best_score)
+            # moves_left = depth (approximation simple et correcte)
+            found_forced = (ai, depth, depth, best_score)
             break
         if best_score <= -9_000_000:
-            remaining = 10_000_000 - abs(best_score)
-            moves_left = max(1, depth - remaining)
-            found_forced = (opp, moves_left, depth, best_score)
+            found_forced = (opp, depth, depth, best_score)
             break
 
     if found_forced is not None:
         winner, moves_left, used_depth, raw_score = found_forced
         approx_turns = max(1, (moves_left + 1) // 2)
-        return {"winner": winner, "moves_left": moves_left,
+        return {"winner": winner, "moves_left": moves_left, "finished": False,
+                "score": 9999,
                 "explanation": f"{COLOR_NAME[winner]} gagne dans environ {approx_turns} tour(s)."}
 
-    if fallback_best_score > 5000:
-        return {"winner": ai, "moves_left": -1,
-                "explanation": f"{COLOR_NAME[ai]} est en avantage, sans gain forcé détecté."}
-    if fallback_best_score < -5000:
-        return {"winner": opp, "moves_left": -1,
-                "explanation": f"{COLOR_NAME[opp]} est en avantage, sans gain forcé détecté."}
+    # Seuil élevé pour éviter les faux positifs (50_000 au lieu de 5_000)
+    if fallback_best_score > 50_000:
+        return {"winner": ai, "moves_left": -1, "finished": False,
+                "score": int(min(fallback_best_score, 500_000)),
+                "explanation": f"{COLOR_NAME[ai]} est en avantage."}
+    if fallback_best_score < -50_000:
+        return {"winner": opp, "moves_left": -1, "finished": False,
+                "score": int(max(fallback_best_score, -500_000)),
+                "explanation": f"{COLOR_NAME[opp]} est en avantage."}
 
-    return {"winner": "unknown", "moves_left": -1,
-            "explanation": "Aucun gain forcé détecté pour l'instant."}
+    return {"winner": "unknown", "moves_left": -1, "finished": False,
+            "score": int(fallback_best_score) if fallback_best_score != -10**18 else 0,
+            "explanation": "Position équilibrée, aucun avantage clair."}
 
 
 # ============================================================
@@ -850,7 +927,6 @@ def api_paint(payload: PaintBoardIn):
         )
 
     _validate_painted_board(board_in, rows_n, cols_n)
-
     inferred_turn = _infer_turn_from_board(board_in, game.starting_color)
     winner, draw = _detect_winner_on_board(board_in)
 
@@ -894,12 +970,9 @@ def api_online_join(payload: OnlineJoinIn):
             room["token_to_color"][token] = YELLOW
             room["status"] = "playing"
             room["updated_at"] = time.time()
-
             _save_online_game_to_db_if_possible(room)
-
             joined_room_id = waiting_room_id
             waiting_room_id = None
-
             return {
                 "room_id": joined_room_id,
                 "player_token": token,
@@ -913,9 +986,7 @@ def api_online_join(payload: OnlineJoinIn):
     room["token_to_color"][token] = RED
     room["status"] = "waiting"
     room["updated_at"] = time.time()
-
     waiting_room_id = room["room_id"]
-
     _save_online_game_to_db_if_possible(room)
 
     return {
@@ -958,7 +1029,6 @@ def api_online_move(payload: OnlineMoveIn):
 
     room["updated_at"] = time.time()
     room["status"] = "finished" if g.finished else "playing"
-
     _save_online_game_to_db_if_possible(room)
 
     return _serialize_online_state(room, payload.player_token)
