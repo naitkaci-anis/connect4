@@ -87,6 +87,7 @@ let _aiThinkingStart = 0;
 let state = null;
 let autoplayRunning = false;
 let stepAiInFlight = false;
+let moveInFlight = false;
 let hoveredCol = null;
 let onlineMode = false;
 let onlineRoomId = null;
@@ -568,8 +569,6 @@ function render() {
 
     // ── Prédiction neuronale automatique ──
     neuralEvalUpdate(state.cursor);
-
-    // ── Hint meilleur coup (humain seulement) ──
     hintUpdate(state);
 }
 
@@ -622,14 +621,17 @@ async function onColClick(col) {
         if (!gameStarted) return;
         if (onlineMode) { await playOnlineMove(col); return; }
         if (!state || state.finished || state.paused) return;
+        if (moveInFlight) return;
 
         const isHumanTurn =
             state.mode === 2 ||
             (state.mode === 1 && !aiStarts() && state.current_turn === "R") ||
             (state.mode === 1 && aiStarts() && state.current_turn === "Y");
 
+        if (!isHumanTurn) return;
+
         // Affichage optimiste AVANT le await
-        if (isHumanTurn && state.board && state.board[0][col] === ".") {
+        if (state.board && state.board[0][col] === ".") {
             let dropRow = -1;
             for (let r = state.rows - 1; r >= 0; r--) {
                 if (state.board[r][col] === ".") { dropRow = r; break; }
@@ -644,12 +646,15 @@ async function onColClick(col) {
             }
         }
 
+        moveInFlight = true;
         await api("/api/move", "POST", { col });
         await refresh();
         await maybeAutoplay();
     } catch (e) {
         console.log(e.message);
         await refresh();
+    } finally {
+        moveInFlight = false;
     }
 }
 
@@ -868,7 +873,6 @@ on(depthEl, "change", async() => {
     await maybeAutoplay();
 });
 
-// Import BGA
 
 // Parties précédentes (DB)
 on(btnLoadDb, "click", async() => {
