@@ -41,10 +41,17 @@ const btnCloseWinner = document.getElementById("btnCloseWinner");
 const btnNewFromWinner = document.getElementById("btnNewFromWinner");
 const modeEl = document.getElementById("mode");
 const robotEl = document.getElementById("robot");
+const robotREl = document.getElementById("robotR");
+const robotYEl = document.getElementById("robotY");
+const robotGroup = document.getElementById("robotGroup");
+const robotRGroup = document.getElementById("robotRGroup");
+const robotYGroup = document.getElementById("robotYGroup");
 const depthEl = document.getElementById("depth");
+const depthGroup = document.getElementById("depthGroup");
 const aiStartsEl = document.getElementById("aiStarts");
 const aiStartsGroup = document.getElementById("aiStartsGroup");
 const btnNew = document.getElementById("btnNew");
+const btnStart = document.getElementById("btnStart");
 const btnPause = document.getElementById("btnPause");
 const btnPrev = document.getElementById("btnPrev");
 const btnNext = document.getElementById("btnNext");
@@ -68,8 +75,6 @@ const paintBrushEl = document.getElementById("paintBrush");
 const btnPaintClear = document.getElementById("btnPaintClear");
 const btnPaintCancel = document.getElementById("btnPaintCancel");
 const btnPaintApply = document.getElementById("btnPaintApply");
-const predictBanner = document.getElementById("predictBanner");
-const predictTextEl = document.getElementById("predictText");
 const btnClosePrediction = document.getElementById("btnClosePrediction");
 const aiThinkingBar = document.getElementById("aiThinkingBar");
 const aiThinkingTxt = document.getElementById("aiThinkingTxt");
@@ -92,6 +97,66 @@ let onlineColor = null;
 let onlinePollingHandle = null;
 let lastFinishedSignature = null;
 let lastConsoleSignature = null;
+let gameStarted = false; // bloque l'autoplay jusqu'au clic sur ▶ Start
+
+// ============================================================
+// NEURAL EVAL AUTO
+// ============================================================
+let _lastNeuralCursor = -1;
+
+async function neuralEvalUpdate(cursor) {
+    // Ne refaire l'appel que si le curseur a changé
+    if (cursor === _lastNeuralCursor) return;
+    _lastNeuralCursor = cursor;
+
+    const label = document.getElementById("neuralEvalLabel");
+    const expl = document.getElementById("neuralEvalExpl");
+    const barR = document.getElementById("neuralBarRed");
+    const barY = document.getElementById("neuralBarYellow");
+    const pct = document.getElementById("neuralBarPct");
+    if (!label) return;
+
+    try {
+        const d = await api("/api/neural_eval");
+
+        // Calcul des pourcentages (v_red ∈ -1..+1)
+        const v = (d.value !== null && d.value !== undefined) ? d.value : 0;
+        const rPct = Math.round(50 + v * 45); // 5..95
+        const yPct = 100 - rPct;
+
+        if (barR) barR.style.width = rPct + "%";
+        if (barY) barY.style.width = yPct + "%";
+        if (pct) pct.textContent = `${rPct} / ${yPct}`;
+
+        const icons = { victoire: "✅", defaite: "❌", nul: "🤝", incertain: "🔮", unavailable: "⚠️", error: "⚠️" };
+        const colors = {
+            victoire: d.color_wins === "R" ? "#ff6b6b" : "#ffe46b",
+            defaite: d.color_wins === "R" ? "#ff6b6b" : "#ffe46b",
+            nul: "#b8c7ee",
+            incertain: "#b8c7ee",
+            unavailable: "#888",
+            error: "#f87171"
+        };
+        const texts = {
+            victoire: d.color_wins === "R" ? "Victoire Rouge 🔴" : "Victoire Jaune 🟡",
+            defaite: d.color_wins === "R" ? "Victoire Rouge 🔴" : "Victoire Jaune 🟡",
+            nul: "Match Nul 🤝",
+            incertain: "Incertain 🔮",
+            unavailable: "Modèle absent",
+            error: "Erreur"
+        };
+
+        label.textContent = (icons[d.label] || "?") + " " + (texts[d.label] || d.label);
+        label.style.color = colors[d.label] || "#eee";
+        if (expl) expl.textContent = d.explanation || "";
+
+    } catch (e) {
+        if (label) {
+            label.textContent = "⚠️ Erreur";
+            label.style.color = "#f87171";
+        }
+    }
+}
 
 // ============================================================
 // Helpers
@@ -105,11 +170,37 @@ function updateAiStartsVisibility() {
     aiStartsGroup.style.display = (modeEl && Number(modeEl.value) === 1) ? "flex" : "none";
 }
 
+function updateRobotVisibility() {
+    const mode = modeEl ? Number(modeEl.value) : 1;
+    const isVsIA = mode === 0;
+    if (robotGroup) robotGroup.style.display = isVsIA ? "none" : "flex";
+    if (robotRGroup) robotRGroup.style.display = isVsIA ? "flex" : "none";
+    if (robotYGroup) robotYGroup.style.display = isVsIA ? "flex" : "none";
+}
+
+function updateDepthVisibility() {
+    if (!depthGroup) return;
+    const mode = modeEl ? Number(modeEl.value) : 1;
+    // Mode IA vs IA : visible seulement si au moins un des deux robots est MiniMax
+    // Autres modes : visible seulement si le robot est MiniMax
+    let needDepth = false;
+    if (mode === 0) {
+        needDepth = robotAlgoR() === "minimax" || robotAlgoY() === "minimax";
+    } else {
+        needDepth = robotAlgoValue() === "minimax";
+    }
+    depthGroup.style.display = needDepth ? "flex" : "none";
+}
+
 // Convertit la valeur du select robot vers la valeur serveur
 function robotAlgoValue() {
     if (!robotEl) return "random";
-    return robotEl.value; // "random" | "minimax" | "strategic"
+    return robotEl.value; // "random" | "minimax" | "neural"
 }
+
+function robotAlgoR() { return robotREl ? robotREl.value : "random"; }
+
+function robotAlgoY() { return robotYEl ? robotYEl.value : "minimax"; }
 
 // ============================================================
 // CONSOLE HELPERS
@@ -139,8 +230,10 @@ function pushConsoleMessageOnce(signature, text, type = "info") {
 // ONLINE HELPERS
 // ============================================================
 function stopOnlinePolling() {
-    if (onlinePollingHandle) { clearInterval(onlinePollingHandle);
-        onlinePollingHandle = null; }
+    if (onlinePollingHandle) {
+        clearInterval(onlinePollingHandle);
+        onlinePollingHandle = null;
+    }
 }
 
 function startOnlinePolling() {
@@ -200,9 +293,11 @@ function buildColNums(cols) {
     }
 }
 
-function setHoverCol(c) { hoveredCol = c;
+function setHoverCol(c) {
+    hoveredCol = c;
     highlightColumn();
-    updateGhost(); }
+    updateGhost();
+}
 
 function highlightColumn() {
     document.querySelectorAll(".cell.col-hover").forEach(el => el.classList.remove("col-hover"));
@@ -281,8 +376,11 @@ function updateOnlineConsoleFromState() {
 
 function renderWinnerModal() {
     if (!winnerModal || !state) return;
-    if (!state.finished) { winnerModal.classList.remove("show");
-        lastFinishedSignature = null; return; }
+    if (!state.finished) {
+        winnerModal.classList.remove("show");
+        lastFinishedSignature = null;
+        return;
+    }
     const sig = `${state.game_index}|${state.winner}|${state.draw}|${state.total}`;
     if (lastFinishedSignature === sig) return;
     lastFinishedSignature = sig;
@@ -306,31 +404,54 @@ function render() {
     setText(progressTxt, `${state.cursor}/${state.total}`);
     const totalSlots = state.rows * state.cols;
     if (progressFill) progressFill.style.width = `${(state.cursor / Math.max(1, totalSlots)) * 100}%`;
-    if (state.match_score) { setText(scoreR, String(state.match_score.R));
-        setText(scoreY, String(state.match_score.Y)); }
+    if (state.match_score) {
+        setText(scoreR, String(state.match_score.R));
+        setText(scoreY, String(state.match_score.Y));
+    }
     if (!boardEl) return;
+
+    const winSet = new Set();
+    if (state.winning_line) {
+        console.log("🏆 winning_line:", state.winning_line);
+        for (const [wr, wc] of state.winning_line) winSet.add(`${wr},${wc}`);
+    }
+
+    const lastMove = (state.moves && state.cursor > 0) ? state.moves[state.cursor - 1] : null;
+    if (lastMove) console.log("🎯 last-move:", lastMove.row, lastMove.col);
+
     boardEl.innerHTML = "";
     boardEl.style.gridTemplateColumns = `repeat(${state.cols}, var(--cell))`;
     boardEl.style.gridTemplateRows = `repeat(${state.rows}, var(--cell))`;
+
     for (let r = 0; r < state.rows; r++) {
         for (let c = 0; c < state.cols; c++) {
             const cellDiv = document.createElement("div");
             cellDiv.className = "cell";
             cellDiv.dataset.col = String(c);
+
             const v = state.board[r][c];
             if (v === "R") cellDiv.classList.add("red");
             if (v === "Y") cellDiv.classList.add("yellow");
             if (hoveredCol === c) cellDiv.classList.add("col-hover");
+            if (winSet.has(`${r},${c}`)) cellDiv.classList.add("winning");
+            if (lastMove && lastMove.row === r && lastMove.col === c)
+                cellDiv.classList.add("last-move");
+
             cellDiv.addEventListener("click", () => onColClick(c));
             cellDiv.addEventListener("mouseenter", () => setHoverCol(c));
             cellDiv.addEventListener("mouseleave", () => setHoverCol(null));
+
             boardEl.appendChild(cellDiv);
         }
     }
+
     renderMoves();
     if (onlineMode) updateOnlineConsoleFromState();
     renderWinnerModal();
     updateGhost();
+
+    // Prédiction neuronale auto
+    neuralEvalUpdate(state.cursor);
 }
 
 // ============================================================
@@ -347,9 +468,18 @@ async function refresh() {
             // Synchroniser le select Robot avec l'état serveur
             if (robotEl) {
                 const ra = (state.robot_algo || "").toLowerCase();
-                if (ra === "strategic") robotEl.value = "strategic";
+                if (ra === "neural") robotEl.value = "neural";
                 else if (ra === "minimax") robotEl.value = "minimax";
                 else robotEl.value = "random";
+            }
+            // Synchroniser les selects Robot Rouge / Robot Jaune (mode IA vs IA)
+            if (robotREl && state.robot_algo_r) {
+                const ra = state.robot_algo_r.toLowerCase();
+                robotREl.value = ra === "neural" ? "neural" : ra === "minimax" ? "minimax" : "random";
+            }
+            if (robotYEl && state.robot_algo_y) {
+                const ra = state.robot_algo_y.toLowerCase();
+                robotYEl.value = ra === "neural" ? "neural" : ra === "minimax" ? "minimax" : "random";
             }
 
             if (depthEl) depthEl.value = String(state.robot_depth);
@@ -360,6 +490,8 @@ async function refresh() {
             }
 
             updateAiStartsVisibility();
+            updateRobotVisibility();
+            updateDepthVisibility();
             render();
         }
     } catch (e) {
@@ -374,6 +506,7 @@ async function refresh() {
 // ============================================================
 async function onColClick(col) {
     try {
+        if (!gameStarted) return; // ◀ bloqué jusqu'au ▶ Start
         if (onlineMode) { await playOnlineMove(col); return; }
         if (!state || state.finished || state.paused) return;
 
@@ -439,6 +572,7 @@ function _needsAI() {
 }
 
 async function maybeAutoplay() {
+    if (!gameStarted) return; // ◀ bloqué jusqu'au Start
     if (autoplayRunning) return;
     if (!_needsAI()) return;
     autoplayRunning = true;
@@ -487,8 +621,10 @@ function hideAiThinking() {
 // ============================================================
 // EVENTS
 // ============================================================
+// Nouvelle partie — réinitialise le plateau seulement (sans lancer l'autoplay)
 on(btnNew, "click", async() => {
     stopAutoplay();
+    gameStarted = false;
     onlineMode = false;
     onlineRoomId = null;
     onlinePlayerToken = null;
@@ -497,10 +633,19 @@ on(btnNew, "click", async() => {
     lastConsoleSignature = null;
     lastFinishedSignature = null;
     clearConsole();
-    pushConsoleMessage("Nouvelle partie locale lancée.", "info");
+    pushConsoleMessage("Plateau réinitialisé. Appuie sur ▶ Start pour commencer.", "info");
     await api("/api/new", "POST");
     hoveredCol = null;
     await refresh();
+    // Pas de maybeAutoplay() ici — on attend le bouton Start
+});
+
+// Start — lance la partie (autoplay IA)
+on(btnStart, "click", async() => {
+    if (onlineMode) return;
+    gameStarted = true;
+    clearConsole();
+    pushConsoleMessage("Partie lancée !", "success");
     await maybeAutoplay();
 });
 
@@ -531,6 +676,8 @@ on(btnNext, "click", async() => {
 on(modeEl, "change", async() => {
     const mode = Number(modeEl.value);
     updateAiStartsVisibility();
+    updateRobotVisibility();
+    updateDepthVisibility();
 
     if (mode === 3) {
         stopAutoplay();
@@ -574,11 +721,32 @@ on(aiStartsEl, "change", async() => {
     await maybeAutoplay();
 });
 
-// Changement de robot (Random / MiniMax / Stratégique)
+// Changement de robot (mode 1 — un seul robot)
 on(robotEl, "change", async() => {
     if (onlineMode) return;
     stopAutoplay();
+    updateDepthVisibility();
     await api("/api/set", "POST", { robot_algo: robotAlgoValue() });
+    await refresh();
+    await maybeAutoplay();
+});
+
+// Changement de Robot Rouge (mode 0 — IA vs IA)
+on(robotREl, "change", async() => {
+    if (onlineMode) return;
+    stopAutoplay();
+    updateDepthVisibility();
+    await api("/api/set", "POST", { robot_algo_r: robotAlgoR() });
+    await refresh();
+    await maybeAutoplay();
+});
+
+// Changement de Robot Jaune (mode 0 — IA vs IA)
+on(robotYEl, "change", async() => {
+    if (onlineMode) return;
+    stopAutoplay();
+    updateDepthVisibility();
+    await api("/api/set", "POST", { robot_algo_y: robotAlgoY() });
     await refresh();
     await maybeAutoplay();
 });
@@ -670,43 +838,111 @@ on(btnNewFromWinner, "click", async() => {
     removeClass(winnerModal, "show");
     if (onlineMode) { pushConsoleMessage("Pour rejouer en ligne, relance le mode En ligne.", "warn"); return; }
     stopAutoplay();
+    gameStarted = false;
     lastFinishedSignature = null;
     await api("/api/new", "POST");
     hoveredCol = null;
+    clearConsole();
+    pushConsoleMessage("Plateau réinitialisé. Appuie sur ▶ Start pour commencer.", "info");
     await refresh();
-    await maybeAutoplay();
+    // Pas de maybeAutoplay() — attendre btnStart
 });
 
 // ============================================================
 // PREDICTION
 // ============================================================
+const predictPanel = document.getElementById("predictPanel");
+const predictLoading = document.getElementById("predictLoading");
+const predictResult = document.getElementById("predictResult");
+const predictWinner = document.getElementById("predictWinner");
+const predictDetail = document.getElementById("predictDetail");
+const predictFill = document.getElementById("predictFill");
+const predictPct = document.getElementById("predictPct");
+
 on(btnPredict, "click", async() => {
-    if (!predictBanner || !predictTextEl) return;
-    predictTextEl.textContent = "Analyse en cours...";
-    predictBanner.style.display = "flex";
+    if (!predictPanel) return;
+    // Afficher le panel en mode loading
+    predictPanel.style.display = "block";
+    if (predictLoading) predictLoading.style.display = "flex";
+    if (predictResult) predictResult.style.display = "none";
+
     try {
         const data = await api("/api/predict");
-        const colorName = data.winner === "R" ? "Rouge" : data.winner === "Y" ? "Jaune" : null;
-        let txt = "";
-        if (colorName && typeof data.moves_left === "number" && data.moves_left > 0) {
-            const turns = Math.max(1, Math.ceil(data.moves_left / 2));
-            txt = "🔮 " + colorName + " gagne dans environ " + turns + " tour(s).";
-        } else if (colorName) {
-            txt = "🔮 " + colorName + " est en avantage.";
-        } else if (data.winner === "draw") {
-            txt = "🤝 Partie terminée : égalité.";
-        } else if (data.explanation) {
-            txt = "🔮 " + data.explanation;
+
+        if (predictLoading) predictLoading.style.display = "none";
+        if (predictResult) predictResult.style.display = "block";
+
+        const isR = data.winner === "R";
+        const isY = data.winner === "Y";
+        const isDraw = data.winner === "draw";
+        const colorName = isR ? "Rouge 🔴" : isY ? "Jaune 🟡" : null;
+
+        // Titre gagnant
+        if (colorName) {
+            predictWinner.textContent = colorName + " va gagner";
+            predictWinner.style.color = isR ? "#ff6b6b" : "#ffe46b";
+        } else if (isDraw) {
+            predictWinner.textContent = "🤝 Égalité probable";
+            predictWinner.style.color = "#b8c7ee";
         } else {
-            txt = "🔮 Aucune prédiction disponible.";
+            predictWinner.textContent = "🔮 Analyse incertaine";
+            predictWinner.style.color = "#b8c7ee";
         }
-        predictTextEl.textContent = txt;
+
+        // Détail texte
+        let detail = "";
+        if (data.finished) {
+            detail = "La partie est terminée.";
+        } else if (colorName && data.moves_left > 0) {
+            const turns = Math.max(1, Math.ceil(data.moves_left / 2));
+            detail = `Victoire forcée détectée en <strong>${data.moves_left} coup(s)</strong> — soit environ <strong>${turns} tour(s)</strong>.`;
+        } else if (colorName) {
+            detail = `<strong>${colorName.split(" ")[0]}</strong> a un avantage stratégique clair, sans gain immédiat forcé détecté.`;
+        } else if (isDraw) {
+            detail = "Aucun des deux joueurs n'a d'avantage décisif détecté.";
+        } else {
+            detail = data.explanation || "Position équilibrée, difficile à trancher.";
+        }
+        predictDetail.innerHTML = detail;
+
+        // Barre d'avantage — basée sur le vrai score minimax
+        let pct = 50;
+        if (data.winner === "R" && data.moves_left > 0) {
+            // Victoire forcée Rouge : plus c'est proche, plus la barre est à droite
+            pct = Math.min(95, 75 + (10 - Math.min(data.moves_left, 10)) * 2);
+        } else if (data.winner === "Y" && data.moves_left > 0) {
+            pct = Math.max(5, 25 - (10 - Math.min(data.moves_left, 10)) * 2);
+        } else if (data.score !== undefined && data.score !== 0) {
+            // Score réel : on normalise entre 5% et 95%
+            const clamped = Math.max(-500000, Math.min(500000, data.score));
+            pct = Math.round(50 + (clamped / 500000) * 45);
+            pct = Math.max(5, Math.min(95, pct));
+        } else if (isDraw) {
+            pct = 50;
+        }
+        if (predictFill) {
+            predictFill.style.width = pct + "%";
+            predictFill.style.background = pct > 55 ?
+                "linear-gradient(90deg,#e53935,#b21a1a)" :
+                pct < 45 ? "linear-gradient(90deg,#b58a00,#ffe46b)" :
+                "linear-gradient(90deg,#378ADD,#1a4fa0)";
+        }
+        const rPct = pct;
+        const yPct = 100 - pct;
+        if (predictPct) predictPct.textContent = pct > 55 ? `Rouge ${rPct}%` : pct < 45 ? `Jaune ${yPct}%` : `Équilibré 50/50`;
+
     } catch (e) {
-        predictTextEl.textContent = "Erreur de prédiction : " + (e && e.message ? e.message : String(e));
+        if (predictLoading) predictLoading.style.display = "none";
+        if (predictResult) predictResult.style.display = "block";
+        if (predictWinner) {
+            predictWinner.textContent = "⚠️ Erreur";
+            predictWinner.style.color = "#ff6b6b";
+        }
+        if (predictDetail) predictDetail.innerHTML = e.message || "Erreur inconnue.";
     }
 });
 on(btnClosePrediction, "click", () => {
-    if (predictBanner) predictBanner.style.display = "none";
+    if (predictPanel) predictPanel.style.display = "none";
 });
 
 // ============================================================
@@ -738,8 +974,10 @@ on(btnPaint, "click", () => {
     buildPaintBoard(state.rows, state.cols);
     paintModal.classList.add("show");
 });
-on(btnPaintClear, "click", () => { if (!state) return;
-    buildPaintBoard(state.rows, state.cols); });
+on(btnPaintClear, "click", () => {
+    if (!state) return;
+    buildPaintBoard(state.rows, state.cols);
+});
 on(btnPaintCancel, "click", () => { if (paintModal) paintModal.classList.remove("show"); });
 on(btnPaintApply, "click", async() => {
     if (!paintGrid) return;
@@ -764,4 +1002,6 @@ if (onlineConsoleEl) {
     pushConsoleMessage("Bienvenue sur Puissance 4.", "info");
 }
 updateAiStartsVisibility();
-refresh().then(() => maybeAutoplay());
+updateRobotVisibility();
+updateDepthVisibility();
+refresh(); // pas de maybeAutoplay au boot — attendre ▶ Start
