@@ -178,7 +178,6 @@
         /* ══════════════════════════════════════════
            EFFETS PLATEAU — dernier coup + victoire
         ══════════════════════════════════════════ */
-        /* Dernier pion joué : carré blanc clignotant */
         
         .cell.last-move {
             outline: 4px solid white !important;
@@ -197,7 +196,6 @@
                 outline-color: transparent;
             }
         }
-        /* 4 pions gagnants : carré coloré clignotant */
         
         .cell.winning {
             position: relative !important;
@@ -223,6 +221,69 @@
             50% {
                 filter: brightness(0.75);
             }
+        }
+        /* ══════════════════════════════════════════
+           HINT PANEL
+        ══════════════════════════════════════════ */
+        
+        .hint-best-label {
+            font-size: 20px;
+            font-weight: 900;
+            text-align: center;
+            padding: 8px 0 4px;
+            letter-spacing: .5px;
+        }
+        
+        .hint-bars-wrap {
+            display: flex;
+            align-items: flex-end;
+            gap: 3px;
+            height: 56px;
+            margin-top: 8px;
+            padding: 0 2px;
+        }
+        
+        .hint-bar {
+            flex: 1;
+            min-width: 0;
+            border-radius: 3px 3px 0 0;
+            transition: height .35s ease, background .25s;
+        }
+        
+        .hint-labels-wrap {
+            display: flex;
+            gap: 3px;
+            margin-top: 3px;
+            padding: 0 2px;
+        }
+        
+        .hint-col-lbl {
+            flex: 1;
+            min-width: 0;
+            text-align: center;
+            font-size: 10px;
+        }
+        
+        .hint-legend {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+            font-size: 11px;
+            color: #888;
+        }
+        
+        .hint-legend span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .hint-legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            flex-shrink: 0;
         }
     </style>
 </head>
@@ -343,8 +404,10 @@
         <!-- MAIN -->
         <main class="main-layout">
 
-            <!-- LEFT CONSOLE -->
+            <!-- LEFT BAR -->
             <aside class="leftbar">
+
+                <!-- Console de partie -->
                 <div class="panel console-panel">
                     <div class="panel-title">Console de partie</div>
                     <div class="panel-sub">Informations de la partie en cours</div>
@@ -352,6 +415,37 @@
                         <div class="console-line info">Bienvenue sur Puissance 4.</div>
                     </div>
                 </div>
+
+                <!-- ══════════════════════════════════
+                     HINT — Meilleur coup (humain)
+                     Visible uniquement quand c'est
+                     le tour d'un joueur humain.
+                ══════════════════════════════════ -->
+                <div class="panel" id="hintPanel" style="display:none">
+                    <div class="panel-title">💡 Meilleur coup</div>
+                    <div class="panel-sub" id="hintSub">Analyse MiniMax en cours…</div>
+
+                    <!-- Colonne recommandée -->
+                    <div class="hint-best-label" id="hintBestCol">—</div>
+
+                    <!-- Barres par colonne -->
+                    <div class="hint-bars-wrap" id="hintColBars"></div>
+                    <div class="hint-labels-wrap" id="hintColLabels"></div>
+
+                    <!-- Légende couleurs -->
+                    <div class="hint-legend">
+                        <span>
+                            <span class="hint-legend-dot" style="background:rgba(60,210,120,0.75)"></span> Avantage
+                        </span>
+                        <span>
+                            <span class="hint-legend-dot" style="background:rgba(120,150,255,0.55)"></span> Neutre
+                        </span>
+                        <span>
+                            <span class="hint-legend-dot" style="background:rgba(230,80,80,0.55)"></span> Danger
+                        </span>
+                    </div>
+                </div>
+
             </aside>
 
             <!-- BOARD -->
@@ -365,7 +459,7 @@
                 </div>
             </section>
 
-            <!-- SIDEBAR -->
+            <!-- SIDEBAR droite -->
             <aside class="sidebar">
 
                 <!-- SCORE -->
@@ -383,19 +477,23 @@
                     </div>
                 </div>
 
-                <!-- NEURAL EVAL (auto-update) -->
+                <!-- ══════════════════════════════════
+                     NEURAL EVAL — Prédiction neuronale
+                     Mise à jour automatique après
+                     chaque coup.
+                ══════════════════════════════════ -->
                 <div class="panel" id="neuralEvalPanel">
                     <div class="panel-title">🧠 Avantage estimé </div>
                     <div class="panel-sub">Estimation rapide apres chaque chaque coup</div>
-                    <div id="neuralEvalContent" style="margin-top:8px;">
-                        <div id="neuralEvalLabel" style="font-size:22px; font-weight:900; text-align:center; padding:6px 0;">—</div>
-                        <div id="neuralEvalExpl" style="font-size:12px; color:#888; text-align:center; margin-bottom:8px;"></div>
+                    <div style="margin-top:8px;">
+                        <div id="neuralEvalLabel" style="font-size:22px;font-weight:900;text-align:center;padding:6px 0;">—</div>
+                        <div id="neuralEvalExpl" style="font-size:12px;color:#888;text-align:center;margin-bottom:8px;"></div>
                         <!-- Barre Rouge / Jaune -->
-                        <div style="display:flex; height:10px; border-radius:5px; overflow:hidden; background:#333;">
-                            <div id="neuralBarRed" style="height:100%; background:#e53935; transition:width .4s; width:50%;"></div>
-                            <div id="neuralBarYellow" style="height:100%; background:#fdd835; transition:width .4s; width:50%;"></div>
+                        <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:#333;">
+                            <div id="neuralBarRed" style="height:100%;background:#e53935;transition:width .4s;width:50%;"></div>
+                            <div id="neuralBarYellow" style="height:100%;background:#fdd835;transition:width .4s;width:50%;"></div>
                         </div>
-                        <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:3px;">
+                        <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:3px;">
                             <span style="color:#e53935;">🔴 Rouge</span>
                             <span id="neuralBarPct" style="color:#aaa;">50 / 50</span>
                             <span style="color:#fdd835;">Jaune 🟡</span>
@@ -435,16 +533,15 @@
         </div>
     </div>
 
-    <!-- PREDICTION BANNER -->
-    <!-- PREDICTION PANEL -->
+    <!-- PREDICTION PANEL (flottant bas-droite) -->
     <div id="predictPanel" style="display:none; position:fixed; bottom:24px; right:24px; z-index:1000;
          width:340px; background:rgba(8,18,40,0.97); border:1px solid rgba(255,255,255,0.12);
          border-radius:16px; padding:18px 20px; box-shadow:0 20px 60px rgba(0,0,0,0.55);
          backdrop-filter:blur(12px);">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
-            <div style="display:flex; align-items:center; gap:8px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div style="display:flex;align-items:center;gap:8px;">
                 <span style="font-size:20px;">🔮</span>
-                <span style="font-weight:900; font-size:15px; color:#eaf0ff;">Prédiction IA</span>
+                <span style="font-weight:900;font-size:15px;color:#eaf0ff;">Prédiction IA</span>
             </div>
             <button id="btnClosePrediction" style="background:none;border:none;cursor:pointer;
                 color:#b8c7ee;font-size:18px;padding:0 4px;line-height:1;">✕</button>
@@ -463,10 +560,11 @@
                          color:#b8c7ee;margin-bottom:5px;">
                         <span>🔴 Rouge</span><span>🟡 Jaune</span>
                     </div>
-                    <div style="height:8px;border-radius:999px;background:rgba(255,255,255,0.10);overflow:hidden;">
+                    <div style="height:8px;border-radius:999px;background:rgba(255,255,255,0.10);
+                         overflow:hidden;">
                         <div id="predictFill" style="height:100%;border-radius:999px;
-                             background:linear-gradient(90deg,#e53935,#b21a1a);
-                             transition:width 0.6s ease;width:50%;"></div>
+                                    background:linear-gradient(90deg,#e53935,#b21a1a);
+                                    transition:width 0.6s ease;width:50%;"></div>
                     </div>
                     <div style="text-align:center;font-size:11px;color:#b8c7ee;margin-top:5px;">
                         <span id="predictPct"></span>
