@@ -10,11 +10,11 @@ import secrets
 import threading
 from typing import Any, Dict, Optional, List, Tuple
 
-from .ai_engine import ai_choose_column_from_game
+from ai_engine import ai_choose_column_from_game
 
-# ── MODIFICATION 1 : Import NeuralAI ──
+# ── Import NeuralAI ──
 try:
-    from .neural_ai import ai_choose_column_neural
+    from neural_ai import ai_choose_column_neural
     NEURAL_AVAILABLE = True
     print("✅  NeuralAI disponible")
 except Exception as e:
@@ -543,10 +543,10 @@ def api_set(payload: SetIn):
 
     def _parse_algo(ra: str) -> str:
         ra = ra.lower()
-        if ra in ("random", "rand"):        return "Random"
-        if ra in ("minimax", "mini"):       return "MiniMax"
-        if ra in ("strategic", "strat"):    return "Strategic"
-        if ra in ("neural", "neuralai", "ia", "reseau"): return "Neural"
+        if ra in ("random", "rand"):                      return "Random"
+        if ra in ("minimax", "mini"):                     return "MiniMax"
+        if ra in ("strategic", "strat"):                  return "Strategic"
+        if ra in ("neural", "neuralai", "ia", "reseau"):  return "Neural"
         raise HTTPException(400, f"robot_algo inconnu : {ra}")
 
     if payload.robot_algo is not None:
@@ -773,6 +773,53 @@ def api_bga_load_table(payload: BgaTableIn):
     _save_game_to_db_if_possible()
     return serialize_state()
 
+
+# ============================================================
+# Hint — meilleur coup pour l'humain (MiniMax)
+# ============================================================
+
+@app.get("/api/hint")
+def api_hint():
+    """
+    Retourne le meilleur coup calculé par MiniMax pour le joueur courant.
+    Utilisé pour afficher une aide au joueur humain.
+    """
+    g = game
+
+    if g.finished:
+        return {"best_col": None, "scores": [], "current_turn": None,
+                "min_score": 0, "max_score": 0}
+
+    depth = min(robot_depth, 5)   # cap à 5 pour la vitesse
+    tmp = [row[:] for row in g.board]
+    scores: List[Optional[int]] = []
+
+    for c in range(g.cols):
+        sc = minimax_score_for_column(tmp, c, depth, g.current_turn)
+        scores.append(sc)
+
+    try:
+        best_col = pick_best(scores)
+    except Exception:
+        best_col = None
+
+    valid = [s for s in scores if s is not None]
+    min_s = min(valid) if valid else 0
+    max_s = max(valid) if valid else 0
+
+    return {
+        "best_col": best_col,
+        "scores": scores,
+        "current_turn": g.current_turn,
+        "min_score": min_s,
+        "max_score": max_s,
+    }
+
+
+# ============================================================
+# Neural Eval — prédiction par le réseau neuronal
+# ============================================================
+
 @app.get("/api/neural_eval")
 def api_neural_eval():
     """Évaluation rapide par la tête value du réseau neuronal."""
@@ -802,7 +849,7 @@ def api_neural_eval():
         tensor = ai_inst._board_to_tensor(g.board, turn)
         with torch.no_grad():
             _, val_t = ai_inst.model(tensor.to(ai_inst.device))
-        v = float(val_t.item())          # -1..+1 du point de vue du joueur courant
+        v = float(val_t.item())           # -1..+1 du point de vue du joueur courant
         v_red = v if turn == RED else -v  # ramené en perspective Rouge
 
         conf = int(abs(v) * 100)
@@ -828,8 +875,10 @@ def api_neural_eval():
     except Exception as e:
         return {"label": "error", "value": 0.0, "confidence": 0,
                 "color_wins": None, "explanation": str(e)}
+
+
 # ============================================================
-# Prédiction
+# Prédiction MiniMax (bouton 🔮 Prédire)
 # ============================================================
 
 @app.get("/api/predict")
@@ -879,7 +928,6 @@ def api_predict():
         fallback_best_score = best_score
 
         if best_score >= 9_000_000:
-            # moves_left = depth (approximation simple et correcte)
             found_forced = (ai, depth, depth, best_score)
             break
         if best_score <= -9_000_000:
@@ -893,7 +941,6 @@ def api_predict():
                 "score": 9999,
                 "explanation": f"{COLOR_NAME[winner]} gagne dans environ {approx_turns} tour(s)."}
 
-    # Seuil élevé pour éviter les faux positifs (50_000 au lieu de 5_000)
     if fallback_best_score > 50_000:
         return {"winner": ai, "moves_left": -1, "finished": False,
                 "score": int(min(fallback_best_score, 500_000)),
