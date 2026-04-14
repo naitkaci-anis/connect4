@@ -488,10 +488,6 @@ class ConfigIn(BaseModel):
     drop_delay_ms: int
 
 
-class BgaTableIn(BaseModel):
-    table_id: int
-
-
 class OnlineJoinIn(BaseModel):
     pass
 
@@ -728,51 +724,6 @@ def api_db_load(game_id: int):
     game.apply_to_cursor(len(game.moves))
     _save_game_to_db_if_possible()
     return serialize_state()
-
-
-@app.post("/api/bga/load_table")
-def api_bga_load_table(payload: BgaTableIn):
-    global game
-
-    table_id = int(payload.table_id)
-    if table_id <= 0:
-        raise HTTPException(400, "table_id invalide")
-
-    try:
-        from .bga_single_table import load_bga_table
-    except Exception:
-        try:
-            from bga_single_table import load_bga_table
-        except Exception as e:
-            raise HTTPException(500, f"Module BGA introuvable: {e}")
-
-    try:
-        data = load_bga_table(table_id)
-    except Exception as e:
-        raise HTTPException(400, f"Impossible de charger la table BGA {table_id}: {e}")
-
-    rows = int(data["rows"])
-    cols = int(data["cols"])
-    starting_color = data.get("starting_color", "R")
-    raw_moves = data.get("moves", [])
-
-    if not raw_moves:
-        raise HTTPException(400, "Aucun coup récupéré pour cette table")
-
-    current_mode = game.mode
-    game = Connect4(rows, cols, starting_color)
-    game.mode = current_mode
-
-    game.moves = []
-    for i, mv in enumerate(raw_moves, start=1):
-        col = int(mv["col"])
-        ok = game.drop_in_column(col)
-        if not ok:
-            raise HTTPException(400, f"Coup invalide au ply {i} (col={col})")
-
-    _save_game_to_db_if_possible()
-    return serialize_state()
-
 
 # ============================================================
 # Hint — meilleur coup pour l'humain (MiniMax)
