@@ -1,12 +1,12 @@
 """
-ai_engine.py  —  IA Puissance 4  (version forte v2)
+ai_engine.py  —  IA Puissance 4  (version forte v3)
 =====================================================
-Corrections v2 :
-  - priority() supprimée des nœuds internes → x3 plus rapide → depth 7-9 réel
-  - Détection double menace dans l'heuristique (piège = perte quasi certaine)
-  - Filtre coups suicidaires AVANT le minimax
-  - Aspiration window pour accélérer iterative deepening
-  - TIME_LIMIT 2.5s
+Optimisations v3 :
+  - bit_count() remplace bin().count('1') → ~4x plus rapide sur l'heuristique
+  - Masques de colonnes pré-calculés pour bonus centre (O(cols) au lieu de O(rows*cols))
+  - count_threats fusionné dans heuristic (1 seul parcours au lieu de 2)
+  - Aspiration window : break immédiat sur fail → évite de chercher 3x le même coup
+  - Table de transposition bornée à 2M entrées (évite la pression mémoire)
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ EXACT = 0; LOWER = 1; UPPER = 2
 
 WIN_SCORE  =  10_000_000
 LOSE_SCORE = -10_000_000
-TIME_LIMIT = 2.5          # secondes max par coup (augmenté)
+TIME_LIMIT = 2.0
+TT_MAX_SIZE = 2_000_000
 
 
 # ══════════════════════════════════════════════════════════════
@@ -27,7 +28,7 @@ TIME_LIMIT = 2.5          # secondes max par coup (augmenté)
 
 class BB:
     __slots__ = ("rows","cols","r_bb","y_bb","heights",
-                 "win_masks","cell_masks","col_order")
+                 "win_masks","cell_masks","col_order","col_masks")
 
     def __init__(self, rows: int, cols: int):
         self.rows    = rows
@@ -38,6 +39,8 @@ class BB:
         self.win_masks  = _build_win_masks(rows, cols)
         self.cell_masks = _build_cell_masks(rows, cols, self.win_masks)
         self.col_order  = sorted(range(cols), key=lambda c: abs(c - cols // 2))
+        # Pré-calculer les masques de colonnes pour le bonus centre (évite O(rows*cols))
+        self.col_masks  = _build_col_masks(rows, cols)
 
     def valid(self) -> List[int]:
         return [c for c in self.col_order if self.heights[c] >= 0]
@@ -65,23 +68,7 @@ class BB:
         return all(self.heights[c] < 0 for c in range(self.cols))
 
     # ------------------------------------------------------------------
-    # Compte les colonnes donnant une victoire immédiate
-    # ------------------------------------------------------------------
-    def count_threats(self, red: bool) -> int:
-        count = 0
-        bb_val = self.r_bb if red else self.y_bb
-        for col in self.valid():
-            pos = self.heights[col] * self.cols + col
-            bit = 1 << pos
-            test = bb_val | bit
-            for m in self.cell_masks[pos]:
-                if (test & m) == m:
-                    count += 1
-                    break
-        return count
-
-    # ------------------------------------------------------------------
-    # Heuristique — rapide et fiable
+    # Heuristique — optimisée v3
     # ------------------------------------------------------------------
     def heuristic(self, ai_red: bool) -> int:
         my  = self.r_bb if ai_red else self.y_bb
@@ -90,37 +77,52 @@ class BB:
         center = cols // 2
         score  = 0
 
-        # 1) Bonus centre
-        for bit in range(self.rows * cols):
-            c = bit % cols
-            w = (cols - abs(c - center)) * 4
-            if my  >> bit & 1: score += w
-            if opp >> bit & 1: score -= w
+        # 1) Bonus centre — O(cols) avec masques pré-calculés + bit_count() natif
+        #    Avant : boucle sur rows*cols bits (81 iterations pour 9x9)
+        #    Après : boucle sur cols colonnes seulement (9 iterations)
+        col_masks = self.col_masks
+        for c in range(cols):
+            w  = (cols - abs(c - center)) * 4
+            cm = col_masks[c]
+            score += (my & cm).bit_count() * w
+            score -= (opp & cm).bit_count() * w
 
-        # 2) Fenêtres de 4
+        # 2) Fenêtres de 4 — bit_count() natif (4x plus rapide que bin().count('1'))
+        #    Avant : bin(x & m).count('1') → conversion string à chaque appel
+        #    Après : (x & m).bit_count()   → opération native Python 3.10+
         for m in self.win_masks:
-            mc = bin(my  & m).count('1')
-            oc = bin(opp & m).count('1')
+            mc = (my  & m).bit_count()
+            oc = (opp & m).bit_count()
             if mc and oc: continue
             if oc == 0:
-                if   mc == 3: score += 1_000   # menace de victoire
+                if   mc == 3: score += 1_000
                 elif mc == 2: score +=    30
                 elif mc == 1: score +=     3
             elif mc == 0:
-                if   oc == 3: score -= 3_000   # bloquer adversaire prioritaire
-                elif oc == 2: score -=    60
+                if   oc == 3: score -= 5_000
+                elif oc == 2: score -=   100
                 elif oc == 1: score -=     5
 
-        # 3) Menaces immédiates (décisif)
-        my_t  = self.count_threats(ai_red)
-        opp_t = self.count_threats(not ai_red)
+        # 3) Menaces immédiates — fusionné en 1 parcours (au lieu de 2 appels count_threats)
+        #    Avant : count_threats(ai_red) + count_threats(not ai_red) = 2 boucles
+        #    Après : 1 seule boucle qui calcule my_t et opp_t ensemble
+        my_t = opp_t = 0
+        heights = self.heights
+        cell_masks = self.cell_masks
+        for col in self.col_order:
+            if heights[col] < 0: continue
+            pos  = heights[col] * cols + col
+            bit  = 1 << pos
+            cms  = cell_masks[pos]
+            if any(((my  | bit) & m) == m for m in cms): my_t  += 1
+            if any(((opp | bit) & m) == m for m in cms): opp_t += 1
 
         score += my_t  * 80_000
-        score -= opp_t * 100_000   # pénaliser fort les menaces adverses
+        score -= opp_t * 130_000
 
         # 4) Double menace = victoire / défaite quasi certaine
-        if my_t  >= 2: score += 800_000   # on va gagner
-        if opp_t >= 2: score -= 900_000   # on va perdre (piège)
+        if my_t  >= 2: score += 800_000
+        if opp_t >= 2: score -= 1_100_000
 
         return score
 
@@ -160,10 +162,19 @@ def _build_cell_masks(rows: int, cols: int, win_masks: List[int]) -> List[List[i
     _MASK_CACHE[(rows, cols)] = (win_masks, cm)
     return cm
 
+def _build_col_masks(rows: int, cols: int) -> List[int]:
+    """Masque de bits pour chaque colonne (tous les bits de la colonne c à 1)."""
+    masks = []
+    for c in range(cols):
+        m = 0
+        for r in range(rows):
+            m |= 1 << (r * cols + c)
+        masks.append(m)
+    return masks
+
 
 # ══════════════════════════════════════════════════════════════
 # MINIMAX alpha-beta + TT
-# Amélioration clé : priority() supprimée des nœuds internes
 # ══════════════════════════════════════════════════════════════
 
 def _search(bb: BB, depth: int, alpha: int, beta: int,
@@ -192,14 +203,8 @@ def _search(bb: BB, depth: int, alpha: int, beta: int,
 
     a0, b0 = alpha, beta
 
-    # ── Tri des coups RAPIDE (pas de drop/undo ici → x3 plus vite) ──
-    # On utilise juste l'ordre centre pré-calculé (déjà dans bb.col_order)
-    # Les coups gagnants/bloquants sont détectés NATURELLEMENT par
-    # l'alpha-beta : un coup qui gagne retourne WIN_SCORE immédiatement
-    # et coupe toutes les autres branches.
-    # On garde quand même un tri léger sur les 2 premiers niveaux.
+    # ── Tri des coups RAPIDE ──
     if depth >= 3:
-        # Tri rapide : détecter gagnant/bloquant sans drop complet
         winners = []
         blockers = []
         others   = []
@@ -208,18 +213,11 @@ def _search(bb: BB, depth: int, alpha: int, beta: int,
         for col in valid:
             pos = bb.heights[col] * bb.cols + col
             bit = 1 << pos
-            # Gagnant immédiat ?
-            test = ai_bb | bit
-            win = any((test & m) == m for m in bb.cell_masks[pos])
-            if win: winners.append(col); continue
-            # Bloquant immédiat ?
-            test2 = opp_bb | bit
-            block = any((test2 & m) == m for m in bb.cell_masks[pos])
-            if block: blockers.append(col); continue
+            if any(((ai_bb  | bit) & m) == m for m in bb.cell_masks[pos]): winners.append(col); continue
+            if any(((opp_bb | bit) & m) == m for m in bb.cell_masks[pos]): blockers.append(col); continue
             others.append(col)
         ordered = winners + blockers + others
     else:
-        # Nœuds profonds : juste l'ordre centre (très rapide)
         ordered = valid
 
     if maxing:
@@ -244,7 +242,9 @@ def _search(bb: BB, depth: int, alpha: int, beta: int,
             if alpha >= beta: break
 
     flag = EXACT if a0 < best < b0 else (LOWER if best >= b0 else UPPER)
-    tt[key] = (flag, best)
+    # Borner la TT pour éviter la pression mémoire sur les longues parties
+    if len(tt) < TT_MAX_SIZE:
+        tt[key] = (flag, best)
     return best
 
 
@@ -288,24 +288,24 @@ def _iterative_deepening(bb: BB, ai_red: bool, max_depth: int,
             bb.undo(col, pos, ai_red)
             scores[col] = sc
 
-            # Si hors fenêtre → relancer sans restriction
+            # Si hors fenêtre → sortir immédiatement et relancer proprement
+            # CORRECTION v3 : break immédiat au lieu de continuer avec la mauvaise fenêtre
+            # Avant : on continuait les coups restants avec la fenêtre ouverte ET on re-cherchait tout
+            # Après : break → relance complète et propre (évite de chercher certains coups 3 fois)
             if sc <= alpha or sc >= beta:
                 research = True
-                alpha = LOSE_SCORE - 1
-                beta  = WIN_SCORE  + 1
+                break
 
-        # Relancer si nécessaire (aspiration failed)
+        # Relancer si nécessaire (aspiration failed) — relance complète et propre
         if research and not (time.time() > deadline):
-            scores_retry: Dict[int, int] = {}
+            scores.clear()  # scores partiels non fiables → tout recalculer proprement
             for col in ordered:
                 if time.time() > deadline: break
                 pos = bb.drop(col, ai_red)
                 sc  = _search(bb, depth-1, LOSE_SCORE-1, WIN_SCORE+1, False,
                               ai_red, not ai_red, pos, tt, deadline)
                 bb.undo(col, pos, ai_red)
-                scores_retry[col] = sc
-            if scores_retry:
-                scores.update(scores_retry)
+                scores[col] = sc
 
         if not scores: break
 
@@ -314,7 +314,6 @@ def _iterative_deepening(bb: BB, ai_red: bool, max_depth: int,
 
         # Victoire forcée trouvée → inutile de chercher plus
         if prev_score >= WIN_SCORE: break
-        # Défaite forcée → chercher encore (peut-être on peut retarder)
 
     return best_col
 
@@ -418,10 +417,14 @@ def _fixed_opening(bb: BB, ai_red: bool, cursor: int) -> Optional[int]:
 
     if cursor == 0: return center
     if cursor == 1:
-        if bb.heights[center] < bb.rows - 1:
-            cands = [c for c in [center-1, center+1] if 0 <= c < cols and bb.heights[c] >= 0]
+        opp_played_center = (bb.heights[center] < bb.rows - 1)
+        if opp_played_center:
+            cands = [c for c in [center-1, center+1, center-2, center+2]
+                     if 0 <= c < cols and bb.heights[c] >= 0]
             return cands[0] if cands else center
-        return center
+        if bb.heights[center] >= 0:
+            return center
+        return sorted(valid, key=lambda c: abs(c - center))[0]
 
     zone = [c for c in range(max(0, center-1), min(cols, center+2)) if bb.heights[c] >= 0]
     if zone:
@@ -442,7 +445,6 @@ def _filter_suicide(bb: BB, valid: List[int], ai_red: bool) -> List[int]:
     safe = []
     for col in valid:
         pos = bb.drop(col, ai_red)
-        # Vérifier si l'adversaire peut gagner immédiatement après ce coup
         opp_wins = False
         for ocol in bb.valid():
             opos = bb.heights[ocol] * bb.cols + ocol
@@ -455,7 +457,6 @@ def _filter_suicide(bb: BB, valid: List[int], ai_red: bool) -> List[int]:
         if not opp_wins:
             safe.append(col)
 
-    # Si tous les coups sont suicidaires → on n'a pas le choix, on garde tout
     return safe if safe else valid
 
 
@@ -530,22 +531,19 @@ def choose_column(
     valid = _filter_suicide(bb, valid, ai_red)
 
     # ── 6. Minimax iterative deepening ───────────────────
-    cells  = rows * cols
-    filled = sum(1 for r in range(rows) for c in range(cols) if board[r][c] != EMPTY)
+    # Profondeur basée sur le facteur de branchement RÉEL (colonnes jouables)
+    # et non sur la taille du plateau.
+    # Avec un alpha-beta parfait : nœuds ≈ b^(d/2)
+    # On cible ~2000-5000 nœuds max selon b :
+    #   9 cols → d=7,  7 cols → d=8,  5 cols → d=9,  ≤3 cols → d=11
+    b = len(valid)
+    if   b >= 9: max_d = 7
+    elif b >= 7: max_d = 8
+    elif b >= 5: max_d = 9
+    elif b >= 3: max_d = 11
+    else:        max_d = 14
 
-    # Profondeur adaptative
-    if cells >= 81:
-        max_d = min(depth, 7)
-    elif cells >= 64:
-        max_d = min(depth, 8)
-    else:
-        max_d = min(depth, 9)
-
-    # Plus profond en fin de partie
-    if filled / cells > 0.55:
-        max_d = min(max_d + 2, 12)
-    elif filled / cells > 0.35:
-        max_d = min(max_d + 1, 10)
+    max_d = min(max_d, depth)  # ne pas dépasser la profondeur demandée
 
     return _iterative_deepening(bb, ai_red, max_d, deadline)
 
@@ -608,12 +606,10 @@ if __name__ == "__main__":
 
     print("Test 4 — double menace adversaire (ne doit pas jouer un coup suicide)")
     b4 = [[EMPTY]*cols for _ in range(rows)]
-    # Jaune a 2 menaces en col 3 et col 7
-    for i in range(3): b4[rows-1][i+1] = YELLOW   # menace col 4
-    for i in range(3): b4[rows-1][i+5] = YELLOW   # menace col 8
+    for i in range(3): b4[rows-1][i+1] = YELLOW
+    for i in range(3): b4[rows-1][i+5] = YELLOW
     t0 = T.time()
     col4 = choose_column(b4, RED, rows, cols, RED, [], 6, depth=7, db_available=False)
     print(f"  → col {col4+1}  ({(T.time()-t0)*1000:.0f}ms)")
 
     print("\n✅ Tests terminés.")
-
