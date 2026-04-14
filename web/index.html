@@ -8,42 +8,59 @@
     <link rel="stylesheet" href="styles.css" />
     <style>
         /* ── AI thinking bar ── */
+        
         .ai-thinking-bar {
             position: fixed;
-            top: 0; left: 0; right: 0;
+            top: 0;
+            left: 0;
+            right: 0;
             z-index: 999;
             background: var(--color-background-secondary, #f5f5f5);
             border-bottom: 1px solid #ddd;
             padding: 6px 16px;
         }
+        
         .ai-thinking-inner {
             display: flex;
             align-items: center;
             gap: 10px;
             font-size: 13px;
         }
+        
         .ai-thinking-dot {
-            width: 10px; height: 10px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             background: #378ADD;
             animation: pulse-dot 1s ease-in-out infinite;
         }
+        
         @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50%       { opacity: .3; }
+            0%,
+            100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: .3;
+            }
         }
+        
         .ai-thinking-progress {
-            flex: 1; height: 4px;
+            flex: 1;
+            height: 4px;
             background: #e0e0e0;
             border-radius: 2px;
             overflow: hidden;
         }
-        .ai-thinking-progress > div {
-            height: 100%; background: #378ADD;
-            width: 0%; transition: width .1s linear;
+        
+        .ai-thinking-progress>div {
+            height: 100%;
+            background: #378ADD;
+            width: 0%;
+            transition: width .1s linear;
         }
-
         /* ── Prediction banner ── */
+        
         .predict-banner {
             display: flex;
             align-items: center;
@@ -57,48 +74,156 @@
             font-size: 14px;
             color: #042C53;
         }
+        
         .btn-close-predict {
-            background: none; border: none;
-            cursor: pointer; font-size: 16px;
-            color: #378ADD; padding: 0 4px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #378ADD;
+            padding: 0 4px;
         }
-
         /* ── Paint modal ── */
-        .paint-card { max-width: 600px; width: 95vw; }
+        
+        .paint-card {
+            max-width: 600px;
+            width: 95vw;
+        }
+        
         .paint-board {
-            display: grid; gap: 3px;
+            display: grid;
+            gap: 3px;
             margin: 14px auto;
             background: #1a4fa0;
-            padding: 8px; border-radius: 8px;
+            padding: 8px;
+            border-radius: 8px;
             width: fit-content;
         }
+        
         .paint-cell {
-            width: 36px; height: 36px;
-            border-radius: 50%; cursor: pointer;
-            border: 2px solid rgba(255,255,255,.2);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid rgba(255, 255, 255, .2);
             transition: transform .1s;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 11px; font-weight: 600;
-            color: white; user-select: none;
-        }
-        .paint-cell:hover  { transform: scale(1.12); }
-        .paint-cell.empty  { background: #fff; color: #999; }
-        .paint-cell.red    { background: #e53935; }
-        .paint-cell.yellow { background: #fdd835; color: #444; }
-        .paint-controls {
-            display: flex; gap: 20px;
+            display: flex;
+            align-items: center;
             justify-content: center;
-            font-size: 14px; margin-bottom: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            color: white;
+            user-select: none;
+        }
+        
+        .paint-cell:hover {
+            transform: scale(1.12);
+        }
+        
+        .paint-cell.empty {
+            background: #fff;
+            color: #999;
+        }
+        
+        .paint-cell.red {
+            background: #e53935;
+        }
+        
+        .paint-cell.yellow {
+            background: #fdd835;
+            color: #444;
+        }
+        
+        .paint-controls {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            font-size: 14px;
+            margin-bottom: 12px;
             flex-wrap: wrap;
         }
-        .paint-controls label { display: flex; align-items: center; gap: 6px; }
-        .paint-note {
-            margin: 0 0 10px 0; text-align: center;
-            font-size: 13px; color: #555;
+        
+        .paint-controls label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
-
+        
+        .paint-note {
+            margin: 0 0 10px 0;
+            text-align: center;
+            font-size: 13px;
+            color: #555;
+        }
         /* ── IA commence — masqué sauf mode 1 ── */
-        #aiStartsGroup { display: none; }
+        
+        #aiStartsGroup {
+            display: none;
+        }
+        /* ── Bouton Start ── */
+        
+        .btn-start {
+            background: linear-gradient(180deg, #e53935, #b71c1c) !important;
+            font-size: 15px;
+            font-weight: 900;
+            letter-spacing: 1px;
+            box-shadow: 0 4px 18px rgba(229, 57, 53, 0.45);
+            border: 1px solid rgba(255, 100, 100, 0.30) !important;
+        }
+        
+        .btn-start:hover {
+            filter: brightness(1.12);
+            box-shadow: 0 6px 24px rgba(229, 57, 53, 0.65);
+        }
+        /* ══════════════════════════════════════════
+           EFFETS PLATEAU — dernier coup + victoire
+        ══════════════════════════════════════════ */
+        /* Dernier pion joué : carré blanc clignotant */
+        
+        .cell.last-move {
+            outline: 4px solid white !important;
+            outline-offset: 2px !important;
+            animation: lm-blink 0.8s step-start infinite !important;
+            position: relative !important;
+            z-index: 5 !important;
+        }
+        
+        @keyframes lm-blink {
+            0%,
+            100% {
+                outline-color: white;
+            }
+            50% {
+                outline-color: transparent;
+            }
+        }
+        /* 4 pions gagnants : carré coloré clignotant */
+        
+        .cell.winning {
+            position: relative !important;
+            z-index: 10 !important;
+            animation: win-blink 0.45s step-start infinite !important;
+        }
+        
+        .cell.winning.red {
+            outline: 5px solid #ff2222 !important;
+            outline-offset: 3px !important;
+        }
+        
+        .cell.winning.yellow {
+            outline: 5px solid #ffe500 !important;
+            outline-offset: 3px !important;
+        }
+        
+        @keyframes win-blink {
+            0%,
+            100% {
+                filter: brightness(1.5);
+            }
+            50% {
+                filter: brightness(0.75);
+            }
+        }
     </style>
 </head>
 
@@ -109,6 +234,7 @@
         <header class="topbar">
             <div class="brand">
                 <h1>Puissance 4</h1>
+                <p class="subtitle">By ANIS NAIT KACI</p>
             </div>
 
             <div class="toolbar">
@@ -133,18 +259,38 @@
                     </select>
                 </div>
 
-                <!-- Robot -->
-                <div class="control-group">
+                <!-- Robot (mode 1 : un seul robot) -->
+                <div class="control-group" id="robotGroup">
                     <label for="robot">Robot</label>
                     <select id="robot">
                         <option value="random">Random</option>
                         <option value="minimax">MiniMax</option>
-                        <option value="strategic">Stratégique (BD)</option>
+                        <option value="neural">IA Neuronale 🧠</option>
+                    </select>
+                </div>
+
+                <!-- Robot Rouge (mode 0 : IA vs IA) -->
+                <div class="control-group" id="robotRGroup" style="display:none">
+                    <label for="robotR">🔴 Robot Rouge</label>
+                    <select id="robotR">
+                        <option value="random">Random</option>
+                        <option value="minimax">MiniMax</option>
+                        <option value="neural">IA Neuronale 🧠</option>
+                    </select>
+                </div>
+
+                <!-- Robot Jaune (mode 0 : IA vs IA) -->
+                <div class="control-group" id="robotYGroup" style="display:none">
+                    <label for="robotY">🟡 Robot Jaune</label>
+                    <select id="robotY">
+                        <option value="random">Random</option>
+                        <option value="minimax">MiniMax</option>
+                        <option value="neural">IA Neuronale 🧠</option>
                     </select>
                 </div>
 
                 <!-- Profondeur -->
-                <div class="control-group">
+                <div class="control-group" id="depthGroup">
                     <label for="depth">Profondeur</label>
                     <select id="depth">
                         <option value="1">1</option>
@@ -159,13 +305,14 @@
                 </div>
 
                 <div class="actions">
-                    <button id="btnNew"      class="btn primary">Nouvelle partie</button>
-                    <button id="btnPause"    class="btn">Pause / Reprendre</button>
-                    <button id="btnPrev"     class="btn">Undo</button>
-                    <button id="btnNext"     class="btn">Redo</button>
-                    <button id="btnPaint"    class="btn">✏️ Peindre</button>
-                    <button id="btnPredict"  class="btn">🔮 Prédire</button>
-                    <button id="btnLoadDb"   class="btn">Parties précédentes</button>
+                    <button id="btnStart" class="btn btn-start">▶ Start</button>
+                    <button id="btnNew" class="btn primary">Nouvelle partie</button>
+                    <button id="btnPause" class="btn">Pause / Reprendre</button>
+                    <button id="btnPrev" class="btn">Undo</button>
+                    <button id="btnNext" class="btn">Redo</button>
+                    <button id="btnPaint" class="btn">✏️ Peindre</button>
+                    <button id="btnPredict" class="btn">🔮 Prédire</button>
+                    <button id="btnLoadDb" class="btn">Parties précédentes</button>
                     <button id="btnSettings" class="btn">Paramètres</button>
                 </div>
             </div>
@@ -236,6 +383,26 @@
                     </div>
                 </div>
 
+                <!-- NEURAL EVAL (auto-update) -->
+                <div class="panel" id="neuralEvalPanel">
+                    <div class="panel-title">🧠 Prédiction IA</div>
+                    <div class="panel-sub">Mise à jour automatique après chaque coup</div>
+                    <div id="neuralEvalContent" style="margin-top:8px;">
+                        <div id="neuralEvalLabel" style="font-size:22px; font-weight:900; text-align:center; padding:6px 0;">—</div>
+                        <div id="neuralEvalExpl" style="font-size:12px; color:#888; text-align:center; margin-bottom:8px;"></div>
+                        <!-- Barre Rouge / Jaune -->
+                        <div style="display:flex; height:10px; border-radius:5px; overflow:hidden; background:#333;">
+                            <div id="neuralBarRed" style="height:100%; background:#e53935; transition:width .4s; width:50%;"></div>
+                            <div id="neuralBarYellow" style="height:100%; background:#fdd835; transition:width .4s; width:50%;"></div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:3px;">
+                            <span style="color:#e53935;">🔴 Rouge</span>
+                            <span id="neuralBarPct" style="color:#aaa;">50 / 50</span>
+                            <span style="color:#fdd835;">Jaune 🟡</span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- IMPORT BGA -->
                 <div class="panel import-panel">
                     <div class="panel-title">Importer une partie BGA</div>
@@ -269,9 +436,44 @@
     </div>
 
     <!-- PREDICTION BANNER -->
-    <div id="predictBanner" class="predict-banner" style="display:none">
-        <span id="predictText"></span>
-        <button id="btnClosePrediction" class="btn-close-predict">✕</button>
+    <!-- PREDICTION PANEL -->
+    <div id="predictPanel" style="display:none; position:fixed; bottom:24px; right:24px; z-index:1000;
+         width:340px; background:rgba(8,18,40,0.97); border:1px solid rgba(255,255,255,0.12);
+         border-radius:16px; padding:18px 20px; box-shadow:0 20px 60px rgba(0,0,0,0.55);
+         backdrop-filter:blur(12px);">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:20px;">🔮</span>
+                <span style="font-weight:900; font-size:15px; color:#eaf0ff;">Prédiction IA</span>
+            </div>
+            <button id="btnClosePrediction" style="background:none;border:none;cursor:pointer;
+                color:#b8c7ee;font-size:18px;padding:0 4px;line-height:1;">✕</button>
+        </div>
+        <div id="predictBody">
+            <div id="predictLoading" style="display:flex;align-items:center;gap:10px;color:#b8c7ee;font-size:13px;">
+                <div style="width:10px;height:10px;border-radius:50%;background:#378ADD;
+                     animation:pulse-dot 1s ease-in-out infinite;flex-shrink:0;"></div>
+                Analyse en cours...
+            </div>
+            <div id="predictResult" style="display:none;">
+                <div id="predictWinner" style="font-size:22px;font-weight:900;margin-bottom:10px;"></div>
+                <div id="predictDetail" style="font-size:13px;color:#b8c7ee;line-height:1.5;"></div>
+                <div id="predictBar" style="margin-top:14px;">
+                    <div style="display:flex;justify-content:space-between;font-size:11px;
+                         color:#b8c7ee;margin-bottom:5px;">
+                        <span>🔴 Rouge</span><span>🟡 Jaune</span>
+                    </div>
+                    <div style="height:8px;border-radius:999px;background:rgba(255,255,255,0.10);overflow:hidden;">
+                        <div id="predictFill" style="height:100%;border-radius:999px;
+                             background:linear-gradient(90deg,#e53935,#b21a1a);
+                             transition:width 0.6s ease;width:50%;"></div>
+                    </div>
+                    <div style="text-align:center;font-size:11px;color:#b8c7ee;margin-top:5px;">
+                        <span id="predictPct"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- PAINT MODAL -->
@@ -279,8 +481,7 @@
         <div class="modal-card paint-card">
             <h2>✏️ Peindre une position</h2>
             <p>
-                Clique sur les cases pour placer Rouge, Jaune ou effacer.<br>
-                Le serveur déduira automatiquement à qui c'est de jouer selon le nombre de pions.
+                Clique sur les cases pour placer Rouge, Jaune ou effacer.<br> Le serveur déduira automatiquement à qui c'est de jouer selon le nombre de pions.
             </p>
             <div class="paint-note">
                 Règle : pas de pions flottants, et le nombre de pions doit être cohérent.
@@ -296,9 +497,9 @@
                 </label>
             </div>
             <div class="modal-actions">
-                <button id="btnPaintClear"  class="btn">Réinitialiser</button>
+                <button id="btnPaintClear" class="btn">Réinitialiser</button>
                 <button id="btnPaintCancel" class="btn">Annuler</button>
-                <button id="btnPaintApply"  class="btn primary">Jouer depuis cette position</button>
+                <button id="btnPaintApply" class="btn primary">Jouer depuis cette position</button>
             </div>
         </div>
     </div>
@@ -307,9 +508,9 @@
     <div id="winnerModal" class="modal">
         <div class="modal-card">
             <h2 id="winnerTitle">Fin de partie</h2>
-            <p  id="winnerText">Le gagnant est ...</p>
+            <p id="winnerText">Le gagnant est ...</p>
             <div class="modal-actions">
-                <button id="btnCloseWinner"   class="btn">Fermer</button>
+                <button id="btnCloseWinner" class="btn">Fermer</button>
                 <button id="btnNewFromWinner" class="btn primary">Nouvelle partie</button>
             </div>
         </div>
@@ -317,4 +518,5 @@
 
     <script src="app.js"></script>
 </body>
+
 </html>
