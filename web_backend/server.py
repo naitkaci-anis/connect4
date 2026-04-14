@@ -10,11 +10,11 @@ import secrets
 import threading
 from typing import Any, Dict, Optional, List, Tuple
 
-from ai_engine import ai_choose_column_from_game
+from .ai_engine import ai_choose_column_from_game
 
 # ── MODIFICATION 1 : Import NeuralAI ──
 try:
-    from neural_ai import ai_choose_column_neural
+    from .neural_ai import ai_choose_column_neural
     NEURAL_AVAILABLE = True
     print("✅  NeuralAI disponible")
 except Exception as e:
