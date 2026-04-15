@@ -8,6 +8,7 @@ import time
 import json
 import secrets
 import threading
+import types
 from typing import Any, Dict, Optional, List, Tuple
 
 from ai_engine import ai_choose_column_from_game
@@ -586,14 +587,16 @@ def api_move(payload: MoveIn):
 
 @app.post("/api/undo")
 def api_undo():
-    game.undo()
+    if game.cursor > 0:
+        game.undo()
     _save_game_to_db_if_possible()
     return serialize_state()
 
 
 @app.post("/api/redo")
 def api_redo():
-    game.redo()
+    if game.cursor < len(game.moves):
+        game.redo()
     _save_game_to_db_if_possible()
     return serialize_state()
 
@@ -947,81 +950,377 @@ def api_neural_eval():
 
 
 # ============================================================
-# Prédiction MiniMax (bouton 🔮 Prédire)
+# Prédiction IA — pure minimax, zéro estimation
 # ============================================================
+#
+# Règles strictes :
+#   • moves_left affiché UNIQUEMENT si la suite est prouvée par minimax
+#   • Jamais de chiffre inventé / estimé
+#   • IA choisit la victoire la PLUS RAPIDE (max score = max depth_restant)
+#   • Adversaire choisit la défaite la PLUS LENTE (min -score)
+#   → la distance retournée est donc la distance réelle et logique
+#
+# Réponse JSON :
+#   winner       : "R" | "Y" | "draw" | "unknown"
+#   moves_left   : int ≥ 1 si prouvé, -1 sinon
+#   certain      : bool
+#   threat       : "double" | "single" | null
+#   best_col     : colonne recommandée (0-indexé)
+#   score_pct    : 0-100 côté Rouge
+#   explanation  : texte humain
+# ============================================================
+
+import math as _math
+
+_PRED_WIN     = 100_000   # score terminal dans _pmm
+_PRED_BUDGET  = 3.0       # secondes max (depth 8 sur 9×9 peut être long)
+_PRED_MAXD    = 8         # profondeur max
+_pmm_deadline = 0.0       # mis à jour avant chaque appel
+
+
+def _pdrop(board, col, color):
+    rows = len(board)
+    if board[0][col] != EMPTY:
+        return None
+    r = rows - 1
+    while r >= 0 and board[r][col] != EMPTY:
+        r -= 1
+    if r < 0:
+        return None
+    board[r][col] = color
+    return r
+
+
+def _pheur(board, ai):
+    """Heuristique positionnelle pour les feuilles."""
+    rows, cols = len(board), len(board[0])
+    opp    = YELLOW if ai == RED else RED
+    center = cols // 2
+    s = 0
+    for c in range(cols):
+        w = cols - abs(c - center)
+        for r in range(rows):
+            if   board[r][c] == ai:  s += w * 3
+            elif board[r][c] == opp: s -= w * 3
+
+    def sw(win):
+        a, o, e = win.count(ai), win.count(opp), win.count(EMPTY)
+        if o == 0:
+            if a == 3 and e == 1: return  5_000
+            if a == 2 and e == 2: return    200
+        if a == 0:
+            if o == 3 and e == 1: return -8_000
+            if o == 2 and e == 2: return   -300
+        return 0
+
+    for r in range(rows):
+        for c in range(cols - 3):
+            s += sw([board[r][c+i] for i in range(4)])
+    for c in range(cols):
+        for r in range(rows - 3):
+            s += sw([board[r+i][c] for i in range(4)])
+    for r in range(3, rows):
+        for c in range(cols - 3):
+            s += sw([board[r-i][c+i] for i in range(4)])
+    for r in range(rows - 3):
+        for c in range(cols - 3):
+            s += sw([board[r+i][c+i] for i in range(4)])
+    return s
+
+
+def _pmm(board, depth, alpha, beta, maximizing, ai):
+    """
+    Minimax alpha-beta dédié à la prédiction.
+
+    Convention score terminal : ±(_PRED_WIN + depth_restant)
+    Plus depth_restant est élevé = victoire plus tôt = plus favorable.
+
+    Conséquence directe :
+      - AI maximise → choisit la victoire la PLUS RAPIDE (depth_restant max)
+      - Minimizing  → choisit la défaite la PLUS LENTE (depth_restant min pour opp)
+    Donc moves_left = depth_racine - depth_restant  ← distance RÉELLE.
+    """
+    global _pmm_deadline
+    opp = YELLOW if ai == RED else RED
+
+    if _is_win(board, ai):  return _PRED_WIN + depth    # ai gagne ici
+    if _is_win(board, opp): return -(_PRED_WIN + depth) # opp gagne ici
+
+    cols  = len(board[0])
+    valid = [c for c in range(cols) if board[0][c] == EMPTY]
+
+    if depth == 0 or not valid:
+        return _pheur(board, ai)
+
+    if time.time() > _pmm_deadline:
+        return _pheur(board, ai)
+
+    center = cols // 2
+    valid.sort(key=lambda c: abs(c - center))
+
+    if maximizing:
+        v = -_math.inf
+        for c in valid:
+            r = _pdrop(board, c, ai)
+            if r is None: continue
+            v = max(v, _pmm(board, depth-1, alpha, beta, False, ai))
+            board[r][c] = EMPTY
+            alpha = max(alpha, v)
+            if alpha >= beta: break
+        return int(v)
+    else:
+        v = _math.inf
+        for c in valid:
+            r = _pdrop(board, c, opp)
+            if r is None: continue
+            v = min(v, _pmm(board, depth-1, alpha, beta, True, ai))
+            board[r][c] = EMPTY
+            beta = min(beta, v)
+            if alpha >= beta: break
+        return int(v)
+
+
+def _count_wins(board, color):
+    """Retourne le nombre de colonnes où color gagne immédiatement."""
+    cols = len(board[0])
+    count = 0
+    wins  = []
+    for c in range(cols):
+        r = _pdrop(board, c, color)
+        if r is None: continue
+        if _is_win(board, color):
+            count += 1
+            wins.append(c)
+        board[r][c] = EMPTY
+    return count, wins
+
 
 @app.get("/api/predict")
 def api_predict():
+    """
+    Prédiction pure minimax depth 8.
+    AUCUNE estimation — moves_left est soit prouvé soit absent.
+    """
+    global _pmm_deadline
     g = game
 
+    # ── Partie terminée ────────────────────────────────────────
     if g.finished:
         if g.draw:
-            return {"winner": "draw", "moves_left": 0, "explanation": "Partie terminée : égalité."}
-        return {"winner": g.winner, "moves_left": 0,
+            return {"winner": "draw", "moves_left": 0, "certain": True,
+                    "threat": None, "best_col": None, "score_pct": 50,
+                    "explanation": "Partie terminée : égalité."}
+        sp = 92 if g.winner == RED else 8
+        return {"winner": g.winner, "moves_left": 0, "certain": True,
+                "threat": None, "best_col": None, "score_pct": sp,
                 "explanation": f"Partie terminée : {COLOR_NAME[g.winner]} a gagné."}
 
-    ai = g.current_turn
-    opp = YELLOW if ai == RED else RED
-    tmp = [row[:] for row in g.board]
+    player = g.current_turn
+    opp    = YELLOW if player == RED else RED
+    board  = [row[:] for row in g.board]
+    cols   = g.cols
 
-    for c in range(g.cols):
-        if tmp[0][c] != EMPTY:
-            continue
-        r = None
-        for rr in range(g.rows - 1, -1, -1):
-            if tmp[rr][c] == EMPTY:
-                r = rr
-                break
-        if r is None:
-            continue
-        tmp[r][c] = ai
-        if _is_win(tmp, ai):
-            tmp[r][c] = EMPTY
-            return {"winner": ai, "moves_left": 1,
-                    "explanation": f"{COLOR_NAME[ai]} gagne au prochain coup."}
-        tmp[r][c] = EMPTY
+    # ── Victoire immédiate (1 coup) ────────────────────────────
+    n_wins_ai, win_cols_ai = _count_wins(board, player)
+    if n_wins_ai >= 1:
+        best = win_cols_ai[0]
+        sp   = 92 if player == RED else 8
+        return {"winner": player, "moves_left": 1, "certain": True,
+                "threat": "single", "best_col": best, "score_pct": sp,
+                "explanation": f"{COLOR_NAME[player]} gagne au prochain coup (col {best+1})."}
 
-    max_depth = 6
-    found_forced = None
-    fallback_best_score = -10**18
-    deadline = time.time() + 1.5
+    # ── Détection double menace adversaire ────────────────────
+    # (l'adversaire gagne en 1 quoi que l'on joue)
+    n_wins_opp, win_cols_opp = _count_wins(board, opp)
+    if n_wins_opp >= 2:
+        # Double menace : l'adversaire gagne en 2 coups (son prochain)
+        sp = 8 if opp == RED else 92
+        return {"winner": opp, "moves_left": 2, "certain": True,
+                "threat": "double", "best_col": win_cols_opp[0], "score_pct": sp,
+                "explanation": (f"⚠️ Double menace : {COLOR_NAME[opp]} a {n_wins_opp} "
+                                f"victoires immédiates — défaite inévitable en 2 coups.")}
 
-    for depth in range(2, max_depth + 1):
-        best_score = -10**18
-        for c in range(g.cols):
-            if time.time() > deadline:
-                break
-            sc = minimax_score_for_column(tmp, c, depth, ai)
-            if sc is not None and sc > best_score:
-                best_score = sc
-        fallback_best_score = best_score
+    # ── Blocage obligatoire (1 menace adversaire) ──────────────
+    if n_wins_opp == 1:
+        # On doit bloquer col win_cols_opp[0], mais on continue quand même
+        # l'analyse minimax pour savoir si on gagne après
+        pass
 
-        if best_score >= 9_000_000:
-            found_forced = (ai, depth, depth, best_score)
+    # ── Minimax iterative deepening depth 1→8, budget 3 s ─────
+    # Convention : score = ±(_PRED_WIN + depth_restant)
+    # AI maximise → victoire la plus rapide (depth_restant max)
+    # Minimizing  → défaite la plus lente pour l'adversaire
+    # moves_left  = depth - (score - _PRED_WIN) ← RÉEL, pas estimé
+    _pmm_deadline = time.time() + _PRED_BUDGET
+
+    proven_winner = None
+    proven_ml     = -1
+    proven_col    = -1
+    best_heur_score = 0
+    best_heur_col   = 0
+    reached_depth   = 0
+
+    center = cols // 2
+    valid  = sorted([c for c in range(cols) if board[0][c] == EMPTY],
+                    key=lambda c: abs(c - center))
+
+    for depth in range(1, _PRED_MAXD + 1):
+        if time.time() > _pmm_deadline:
             break
-        if best_score <= -9_000_000:
-            found_forced = (opp, depth, depth, best_score)
+
+        depth_best_score = -_math.inf
+        depth_best_col   = valid[0]
+        timed_out        = False
+
+        for c in valid:
+            if time.time() > _pmm_deadline:
+                timed_out = True
+                break
+            r = _pdrop(board, c, player)
+            if r is None: continue
+            sc = _pmm(board, depth-1, -_math.inf, _math.inf, False, player)
+            board[r][c] = EMPTY
+            if sc > depth_best_score:
+                depth_best_score = sc
+                depth_best_col   = c
+
+        if timed_out and depth > 1:
+            break   # profondeur incomplète → on garde la précédente
+
+        reached_depth   = depth
+        best_heur_score = depth_best_score
+        best_heur_col   = depth_best_col
+
+        # Victoire forcée AI
+        if depth_best_score >= _PRED_WIN:
+            remaining = depth_best_score - _PRED_WIN
+            ml = depth - remaining
+            ml = max(1, ml)
+            proven_winner = player
+            proven_ml     = ml
+            proven_col    = depth_best_col
+            break   # inutile d'aller plus loin
+
+        # Défaite forcée (toutes les colonnes mènent à la victoire opp)
+        if depth_best_score <= -_PRED_WIN:
+            remaining = (-depth_best_score) - _PRED_WIN
+            ml = depth - remaining
+            ml = max(1, ml)
+            proven_winner = opp
+            proven_ml     = ml
+            proven_col    = depth_best_col
             break
 
-    if found_forced is not None:
-        winner, moves_left, used_depth, raw_score = found_forced
-        approx_turns = max(1, (moves_left + 1) // 2)
-        return {"winner": winner, "moves_left": moves_left, "finished": False,
-                "score": 9999,
-                "explanation": f"{COLOR_NAME[winner]} gagne dans environ {approx_turns} tour(s)."}
+    # ── Résultat : victoire forcée prouvée ─────────────────────
+    if proven_winner is not None:
+        ml    = proven_ml
+        turns = max(1, (ml + 1) // 2)
+        sp    = 92 if proven_winner == RED else 8
+        threat_tag = "double" if n_wins_opp >= 2 else "single" if ml == 1 else None
+        return {"winner": proven_winner, "moves_left": ml, "certain": True,
+                "threat": threat_tag, "best_col": proven_col, "score_pct": sp,
+                "explanation": (f"✅ Suite prouvée : {COLOR_NAME[proven_winner]} gagne "
+                                f"en {ml} coup(s) (~{turns} tour(s)) — col {proven_col+1}.")}
 
-    if fallback_best_score > 50_000:
-        return {"winner": ai, "moves_left": -1, "finished": False,
-                "score": int(min(fallback_best_score, 500_000)),
-                "explanation": f"{COLOR_NAME[ai]} est en avantage."}
-    if fallback_best_score < -50_000:
-        return {"winner": opp, "moves_left": -1, "finished": False,
-                "score": int(max(fallback_best_score, -500_000)),
-                "explanation": f"{COLOR_NAME[opp]} est en avantage."}
+    # ── Aucune victoire forcée dans la profondeur atteinte ─────
+    # On demande au réseau neuronal — il est plus fiable que l'heuristique
+    # sur les positions sans suite forcée évidente.
+    # Les mêmes seuils que api_neural_eval sont utilisés (v > 0.45 / v < -0.45)
+    # pour garantir la cohérence entre "Avantage estimé" et "Prédiction IA".
 
-    return {"winner": "unknown", "moves_left": -1, "finished": False,
-            "score": int(fallback_best_score) if fallback_best_score != -10**18 else 0,
-            "explanation": "Position équilibrée, aucun avantage clair."}
+    def _sp(winner: str, intensity: float) -> int:
+        """score_pct côté Rouge (0-100), toujours cohérent avec winner."""
+        intensity = max(0.0, min(1.0, intensity))
+        if winner == RED:    return int(50 + intensity * 42)  # 50→92
+        if winner == YELLOW: return int(50 - intensity * 42)  # 50→8
+        return 50
+
+    threat_str = ""
+    if n_wins_opp == 1:
+        threat_str = f"⚠️ Attention : {COLOR_NAME[opp]} menace col {win_cols_opp[0]+1}. "
+
+    # ── Appel réseau neuronal ─────────────────────────────────
+    neural_winner  = None
+    neural_conf    = 0
+    neural_v_red   = 0.0
+    neural_expl    = ""
+
+    if NEURAL_AVAILABLE:
+        try:
+            import torch
+            from neural_ai import NeuralAI
+            inst = NeuralAI.get_instance()
+            if inst is not None:
+                turn   = g.current_turn
+                tensor = inst._board_to_tensor(g.board, turn)
+                with torch.no_grad():
+                    _, val_t = inst.model(tensor.to(inst.device))
+                v     = float(val_t.item())          # -1..+1 du joueur courant
+                v_red = v if turn == RED else -v     # ramené perspective Rouge
+                conf  = int(abs(v) * 100)
+                neural_conf   = conf
+                neural_v_red  = v_red
+                # Mêmes seuils que api_neural_eval
+                if v > 0.45:
+                    neural_winner = turn
+                    neural_expl   = f"Réseau : victoire {COLOR_NAME[turn]} ({conf}%)"
+                elif v < -0.45:
+                    neural_winner = (YELLOW if turn == RED else RED)
+                    neural_expl   = f"Réseau : victoire {COLOR_NAME[neural_winner]} ({conf}%)"
+                elif abs(v) < 0.15:
+                    neural_winner = "draw"
+                    neural_expl   = f"Réseau : match nul probable ({conf}%)"
+                else:
+                    neural_expl   = f"Réseau : position incertaine (valeur {v:+.2f})"
+        except Exception:
+            pass
+
+    # ── Fusion neural + minimax ───────────────────────────────
+    # Priorité au réseau neuronal quand il est confiant (conf > 45%).
+    # Sinon on utilise le score heuristique du minimax.
+
+    if neural_winner and neural_winner not in ("draw", "unknown") and neural_conf > 45:
+        # Le réseau est confiant → on lui fait confiance
+        w  = neural_winner
+        sp = _sp(w, neural_conf / 100.0)
+        return {"winner": w, "moves_left": -1, "certain": False,
+                "threat": "single" if n_wins_opp == 1 else None,
+                "best_col": best_heur_col, "score_pct": sp,
+                "explanation": (f"{threat_str}{neural_expl}. "
+                                f"Pas de suite forcée détectée (profondeur {reached_depth}).")}
+
+    if neural_winner == "draw" and neural_conf > 45:
+        return {"winner": "draw", "moves_left": -1, "certain": False,
+                "threat": "single" if n_wins_opp == 1 else None,
+                "best_col": best_heur_col, "score_pct": 50,
+                "explanation": (f"{threat_str}{neural_expl}. "
+                                f"Pas de suite forcée détectée (profondeur {reached_depth}).")}
+
+    # Réseau incertain → fallback heuristique minimax
+    if best_heur_score > 5_000:
+        intensity = min(1.0, best_heur_score / 50_000)
+        sp = _sp(player, intensity)
+        return {"winner": player, "moves_left": -1, "certain": False,
+                "threat": "single" if n_wins_opp == 1 else None,
+                "best_col": best_heur_col, "score_pct": sp,
+                "explanation": (f"{threat_str}{COLOR_NAME[player]} en avantage "
+                                f"(minimax prof. {reached_depth}). Réseau incertain.")}
+
+    if best_heur_score < -5_000:
+        intensity = min(1.0, abs(best_heur_score) / 50_000)
+        sp = _sp(opp, intensity)
+        return {"winner": opp, "moves_left": -1, "certain": False,
+                "threat": "single" if n_wins_opp == 1 else None,
+                "best_col": best_heur_col, "score_pct": sp,
+                "explanation": (f"{threat_str}{COLOR_NAME[opp]} en avantage "
+                                f"(minimax prof. {reached_depth}). Réseau incertain.")}
+
+    return {"winner": "unknown", "moves_left": -1, "certain": False,
+            "threat": "single" if n_wins_opp == 1 else None,
+            "best_col": best_heur_col, "score_pct": 50,
+            "explanation": (f"{threat_str}Position équilibrée "
+                            f"(profondeur {reached_depth}). Aucun avantage détecté.")}
+
 
 
 # ============================================================
@@ -1057,6 +1356,32 @@ def api_paint(payload: PaintBoardIn):
     new_game.winner = winner
     new_game.draw = draw
     new_game.winning_line = None
+
+    # ── Patch apply_to_cursor pour que undo/redo parte du plateau peint
+    # et non d'un plateau vide. On capture la snapshot dans la closure.
+    _base = [row[:] for row in board_in]
+    _base_turn = inferred_turn
+
+    def _patched_apply(self, cursor: int):
+        cursor = max(0, min(cursor, len(self.moves)))
+        # Toujours repartir du plateau peint (pas d'un plateau vide)
+        self.board = [row[:] for row in _base]
+        self.finished = False
+        self.draw = False
+        self.winner = None
+        self.winning_line = None
+        self.cursor = 0
+        self.current_turn = _base_turn
+        for i in range(cursor):
+            mv = self.moves[i]
+            self.board[mv.row][mv.col] = mv.color
+            self.cursor += 1
+            self._update_after_move(mv.row, mv.col, mv.color)
+            if self.finished:
+                break
+            self.current_turn = YELLOW if self.current_turn == RED else RED
+
+    new_game.apply_to_cursor = types.MethodType(_patched_apply, new_game)
 
     game = new_game
     _save_game_to_db_if_possible()
