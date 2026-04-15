@@ -178,7 +178,7 @@
         /* ══════════════════════════════════════════
            EFFETS PLATEAU — dernier coup + victoire
         ══════════════════════════════════════════ */
-    
+        
         .cell.last-move {
             outline: 4px solid white !important;
             outline-offset: 2px !important;
@@ -501,6 +501,34 @@
                     </div>
                 </div>
 
+
+
+                <!-- IMPORT FICHIER LOCAL -->
+                <div class="panel">
+                    <div class="panel-title">📁 Importer un fichier</div>
+                    <div style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
+                        <label for="fileInput" id="fileInputLabel" style="cursor:pointer; display:flex; align-items:center; gap:8px;
+                                   border:2px dashed #378ADD; border-radius:8px;
+                                   padding:10px 14px; font-size:13px; color:#378ADD;
+                                   transition:background .2s; user-select:none;">
+                            <span style="font-size:18px;">📂</span>
+                            <span id="fileInputName">Choisir un fichier .txt…</span>
+                        </label>
+                        <input id="fileInput" type="file" accept=".txt,.csv" style="display:none" />
+                        <button id="btnImportFile" class="btn primary" disabled>▶ Charger la partie</button>
+                    </div>
+                    <!-- Options de mode — apparaissent après parsing réussi -->
+                    <div id="fileImportOptions" style="display:none; margin-top:10px; flex-direction:column; gap:8px;">
+                        <div style="font-size:13px; color:#378ADD; font-weight:600;">
+                            ✅ Fichier prêt — Choisir le mode :
+                        </div>
+                        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                            <button id="btnFileContinueIAvIA" class="btn" style="font-size:12px;">🤖 IA vs IA</button>
+                            <button id="btnFileContinueJvsIA" class="btn" style="font-size:12px;">🧑 Joueur vs IA</button>
+                            <button id="btnFileContinueJvsJ" class="btn" style="font-size:12px;">👥 Joueur vs Joueur</button>
+                        </div>
+                    </div>
+                </div>
 
                 <!-- MOVES HISTORY -->
                 <div class="panel">
