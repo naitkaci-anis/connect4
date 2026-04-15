@@ -494,6 +494,14 @@ class BgaTableIn(BaseModel):
     table_id: int
 
 
+class LoadSequenceIn(BaseModel):
+    sequence: str
+    rows: Optional[int] = None
+    cols: Optional[int] = None
+    starting_color: Optional[str] = "R"
+    source: Optional[str] = None
+
+
 class OnlineJoinIn(BaseModel):
     pass
 
@@ -771,6 +779,65 @@ def api_bga_load_table(payload: BgaTableIn):
         ok = game.drop_in_column(col)
         if not ok:
             raise HTTPException(400, f"Coup invalide au ply {i} (col={col})")
+
+    _save_game_to_db_if_possible()
+    return serialize_state()
+
+
+# ============================================================
+# Chargement depuis fichier / séquence locale
+# ============================================================
+
+@app.post("/api/load_sequence")
+def api_load_sequence(payload: LoadSequenceIn):
+    """
+    Charge une partie depuis une séquence de colonnes 1-indexées (chiffres 1-9).
+    La séquence vient du nom du fichier .txt (ex: "31313.txt" → séquence "31313").
+    rows/cols optionnels : fallback sur config.json.
+    """
+    global game
+
+    raw = payload.sequence.strip().replace(";", "").replace(",", "").replace(" ", "")
+    if not raw:
+        raise HTTPException(400, "Séquence vide")
+
+    # Vérification : uniquement des chiffres 1-9
+    for ch in raw:
+        if ch not in "123456789":
+            raise HTTPException(400, f"Caractère invalide dans la séquence : '{ch}' (seuls 1-9 sont acceptés)")
+
+    # Conversion en liste d'entiers 0-indexés
+    try:
+        cols_seq = [int(ch) - 1 for ch in raw]   # "31313" → [2, 0, 2, 0, 2]
+    except ValueError as e:
+        raise HTTPException(400, f"Séquence invalide : {e}")
+
+    rows_n = int(payload.rows) if payload.rows else cfg.get("rows", 9)
+    cols_n = int(payload.cols) if payload.cols else cfg.get("cols", 9)
+    start_color = (payload.starting_color or "R").upper()
+    if start_color not in ("R", "Y"):
+        start_color = "R"
+
+    # Vérification que les colonnes sont dans les limites du plateau
+    for i, col in enumerate(cols_seq, start=1):
+        if col < 0 or col >= cols_n:
+            raise HTTPException(
+                400,
+                f"Coup {i} : colonne {col + 1} hors limites (plateau {cols_n} colonnes). "
+                "Vérifiez la taille du plateau dans Paramètres."
+            )
+
+    current_mode = game.mode
+    game = Connect4(rows_n, cols_n, start_color)
+    game.mode = current_mode
+
+    for i, col in enumerate(cols_seq, start=1):
+        ok = game.drop_in_column(col)
+        if not ok:
+            raise HTTPException(
+                400,
+                f"Coup invalide au ply {i} (col={col + 1}) — colonne pleine ou partie déjà terminée"
+            )
 
     _save_game_to_db_if_possible()
     return serialize_state()
