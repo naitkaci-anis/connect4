@@ -761,9 +761,10 @@ on(btnNew, "click", async() => {
     pushConsoleMessage("Plateau réinitialisé. Appuie sur ▶ Start pour commencer.", "info");
     await api("/api/new", "POST");
     hoveredCol = null;
-    // Reset hint
+    // Reset indicateurs
     _lastHintCursor = -2;
     _hintData = null;
+    _lastNeuralCursor = -1;
     await refresh();
 });
 
@@ -940,6 +941,7 @@ on(btnNewFromWinner, "click", async() => {
     hoveredCol = null;
     _lastHintCursor = -2;
     _hintData = null;
+    _lastNeuralCursor = -1;
     clearConsole();
     pushConsoleMessage("Plateau réinitialisé. Appuie sur ▶ Start pour commencer.", "info");
     await refresh();
@@ -971,46 +973,62 @@ on(btnPredict, "click", async() => {
         const isR = data.winner === "R";
         const isY = data.winner === "Y";
         const isDraw = data.winner === "draw";
+        const isUnknown = data.winner === "unknown" || !data.winner;
         const colorName = isR ? "Rouge 🔴" : isY ? "Jaune 🟡" : null;
+        const certain = !!data.certain;
+        const ml = data.moves_left; // -1 si pas prouvé
+        const threat = data.threat || null;
+        const bestCol = (data.best_col !== null && data.best_col !== undefined) ? data.best_col + 1 : null;
 
-        if (colorName) {
+        // ── Titre ──────────────────────────────────────────────
+        if (colorName && certain) {
             predictWinner.textContent = colorName + " va gagner";
             predictWinner.style.color = isR ? "#ff6b6b" : "#ffe46b";
+        } else if (colorName && !certain) {
+            predictWinner.textContent = colorName + " en avantage";
+            predictWinner.style.color = isR ? "#ff9966" : "#ffe49a";
         } else if (isDraw) {
-            predictWinner.textContent = "🤝 Égalité probable";
+            predictWinner.textContent = "🤝 Égalité";
             predictWinner.style.color = "#b8c7ee";
         } else {
-            predictWinner.textContent = "🔮 Analyse incertaine";
+            predictWinner.textContent = "🔮 Position équilibrée";
             predictWinner.style.color = "#b8c7ee";
         }
 
-        let detail = "";
+        // ── Détail ─────────────────────────────────────────────
+        let lines = [];
+
+        // Double menace
+        if (threat === "double") {
+            lines.push(`⚠️ <strong>Double menace détectée</strong> — défaite inévitable.`);
+        } else if (threat === "single") {
+            lines.push(`⚠️ Menace à bloquer immédiatement.`);
+        }
+
+        // Résultat principal
         if (data.finished) {
-            detail = "La partie est terminée.";
-        } else if (colorName && data.moves_left > 0) {
-            const turns = Math.max(1, Math.ceil(data.moves_left / 2));
-            detail = `Victoire forcée détectée en <strong>${data.moves_left} coup(s)</strong> — soit environ <strong>${turns} tour(s)</strong>.`;
-        } else if (colorName) {
-            detail = `<strong>${colorName.split(" ")[0]}</strong> a un avantage stratégique clair.`;
+            lines.push("La partie est terminée.");
+        } else if (certain && ml > 0) {
+            // ✅ Suite PROUVÉE — on affiche le vrai nombre
+            const turns = Math.max(1, Math.ceil(ml / 2));
+            lines.push(`✅ <strong>Suite prouvée</strong> : ${COLOR_NAME_JS(data.winner)} gagne en <strong>${ml} coup(s)</strong> (~${turns} tour(s)).`);
+        } else if (!certain && colorName) {
+            // Avantage heuristique — PAS de nombre de coups, PAS de colonne suggérée
+            lines.push(`📊 Avantage ${colorName.split(" ")[0]} détecté.`);
+            lines.push(`Aucune victoire forcée dans la profondeur analysée.`);
         } else if (isDraw) {
-            detail = "Aucun des deux joueurs n'a d'avantage décisif détecté.";
+            lines.push("Aucun avantage décisif détecté pour l'un ou l'autre.");
         } else {
-            detail = data.explanation || "Position équilibrée, difficile à trancher.";
+            lines.push(data.explanation || "Position équilibrée.");
         }
-        predictDetail.innerHTML = detail;
 
-        let pct = 50;
-        if (data.winner === "R" && data.moves_left > 0) {
-            pct = Math.min(95, 75 + (10 - Math.min(data.moves_left, 10)) * 2);
-        } else if (data.winner === "Y" && data.moves_left > 0) {
-            pct = Math.max(5, 25 - (10 - Math.min(data.moves_left, 10)) * 2);
-        } else if (data.score !== undefined && data.score !== 0) {
-            const clamped = Math.max(-500000, Math.min(500000, data.score));
-            pct = Math.round(50 + (clamped / 500000) * 45);
-            pct = Math.max(5, Math.min(95, pct));
-        } else if (isDraw) {
-            pct = 50;
-        }
+        predictDetail.innerHTML = lines.join("<br>");
+
+        // ── Barre d'avantage ───────────────────────────────────
+        // Utilise score_pct (0-100 côté Rouge) fourni par le serveur
+        let pct = data.score_pct !== undefined ? data.score_pct : 50;
+        pct = Math.max(5, Math.min(95, pct));
+
         if (predictFill) {
             predictFill.style.width = pct + "%";
             predictFill.style.background = pct > 55 ?
@@ -1021,7 +1039,8 @@ on(btnPredict, "click", async() => {
         const rPct = pct,
             yPct = 100 - pct;
         if (predictPct) predictPct.textContent =
-            pct > 55 ? `Rouge ${rPct}%` : pct < 45 ? `Jaune ${yPct}%` : `Équilibré 50/50`;
+            pct > 55 ? `Rouge ${rPct}%` :
+            pct < 45 ? `Jaune ${yPct}%` : `Équilibré 50/50`;
 
     } catch (e) {
         if (predictLoading) predictLoading.style.display = "none";
@@ -1033,6 +1052,8 @@ on(btnPredict, "click", async() => {
         if (predictDetail) predictDetail.innerHTML = e.message || "Erreur inconnue.";
     }
 });
+
+function COLOR_NAME_JS(c) { return c === "R" ? "Rouge 🔴" : "Jaune 🟡"; }
 
 on(btnClosePrediction, "click", () => {
     if (predictPanel) predictPanel.style.display = "none";
@@ -1079,6 +1100,10 @@ on(btnPaintApply, "click", async() => {
         const data = await api("/api/paint", "POST", { board: paintGrid });
         if (paintModal) paintModal.classList.remove("show");
         hoveredCol = null;
+        // Forcer la mise à jour des indicateurs même si cursor reste à 0
+        _lastNeuralCursor = -1;
+        _lastHintCursor = -2;
+        _hintData = null;
         if (data.paint_analysis) {
             const turn = data.paint_analysis.current_turn_inferred === "R" ? "Rouge" : "Jaune";
             pushConsoleMessage(`Position chargée — C'est au joueur ${turn} de jouer.`, "success");
@@ -1212,6 +1237,10 @@ async function loadFileAndSetMode(targetMode) {
         await api("/api/set", "POST", { mode: targetMode });
 
         hoveredCol = null;
+        // Reset indicateurs pour forcer la mise à jour après import
+        _lastNeuralCursor = -1;
+        _lastHintCursor = -2;
+        _hintData = null;
         gameStarted = false;
         updateAiStartsVisibility();
         updateRobotVisibility();
