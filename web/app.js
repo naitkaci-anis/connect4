@@ -67,6 +67,14 @@ const progressTxt = document.getElementById("progressTxt");
 const onlineConsoleEl = document.getElementById("onlineConsole");
 const btnPaint = document.getElementById("btnPaint");
 const btnPredict = document.getElementById("btnPredict");
+const btnImportFile = document.getElementById("btnImportFile");
+const fileInput = document.getElementById("fileInput");
+const fileInputLabel = document.getElementById("fileInputLabel");
+const fileInputName = document.getElementById("fileInputName");
+const fileImportOptions = document.getElementById("fileImportOptions");
+const btnFileContinueIAvIA = document.getElementById("btnFileContinueIAvIA");
+const btnFileContinueJvsIA = document.getElementById("btnFileContinueJvsIA");
+const btnFileContinueJvsJ = document.getElementById("btnFileContinueJvsJ");
 const paintModal = document.getElementById("paintModal");
 const paintBoardEl = document.getElementById("paintBoard");
 const paintBrushEl = document.getElementById("paintBrush");
@@ -1079,6 +1087,160 @@ on(btnPaintApply, "click", async() => {
         await maybeAutoplay();
     } catch (e) { alert("Erreur paint : " + e.message); }
 });
+
+// ============================================================
+// IMPORT FICHIER LOCAL .TXT
+// ============================================================
+
+/** Données parsées du dernier fichier sélectionné */
+let _parsedFileData = null;
+
+/**
+ * Extrait la séquence depuis le NOM du fichier.
+ * Ex: "31313.txt"        → "31313"
+ *     "352735271153.txt" → "352735271153"
+ * Ne garde que les chiffres 1-9 (colonnes 1-indexées).
+ * Retourne { sequence } ou null si aucun chiffre 1-9 trouvé.
+ */
+function parseGameFileName(filename) {
+    // Retirer l'extension (.txt, .csv, etc.)
+    var name = filename;
+    var dotIdx = filename.lastIndexOf(".");
+    if (dotIdx > 0) {
+        name = filename.substring(0, dotIdx);
+    }
+
+    // Garder uniquement les chiffres 1-9
+    var digits = "";
+    for (var i = 0; i < name.length; i++) {
+        var c = name[i];
+        if (c >= "1" && c <= "9") {
+            digits += c;
+        }
+    }
+
+    if (digits.length === 0) return null;
+    return { sequence: digits };
+}
+
+// ── Sélection du fichier ──
+on(fileInput, "change", function() {
+    _parsedFileData = null;
+    if (fileImportOptions) fileImportOptions.style.display = "none";
+    if (btnImportFile) btnImportFile.disabled = true;
+
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) {
+        if (fileInputName) fileInputName.textContent = "Choisir un fichier .txt…";
+        return;
+    }
+    var file = fileInput.files[0];
+    if (fileInputName) fileInputName.textContent = file.name;
+
+    // La séquence EST le nom du fichier (ex: 31313.txt → séquence "31313")
+    var parsed = parseGameFileName(file.name);
+    if (!parsed) {
+        alert(
+            "Nom de fichier invalide : \"" + file.name + "\"\n\n" +
+            "Le nom du fichier doit être une suite de chiffres 1-9.\n" +
+            "Exemple : 31313.txt  ou  352735271153.txt"
+        );
+        fileInput.value = "";
+        if (fileInputName) fileInputName.textContent = "Choisir un fichier .txt…";
+        return;
+    }
+
+    _parsedFileData = parsed;
+    if (btnImportFile) btnImportFile.disabled = false;
+    pushConsoleMessage(
+        "📂 \"" + file.name + "\" — " + parsed.sequence.length + " coups. Clique sur ▶ Charger la partie.",
+        "info"
+    );
+});
+
+// ── Drag & drop sur le label ──
+on(fileInputLabel, "dragover", function(e) {
+    e.preventDefault();
+    if (fileInputLabel) fileInputLabel.style.background = "rgba(55,138,221,.1)";
+});
+on(fileInputLabel, "dragleave", function() {
+    if (fileInputLabel) fileInputLabel.style.background = "";
+});
+on(fileInputLabel, "drop", function(e) {
+    e.preventDefault();
+    if (fileInputLabel) fileInputLabel.style.background = "";
+    if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files[0]) return;
+    var file = e.dataTransfer.files[0];
+    if (fileInput) {
+        try {
+            var dt = new DataTransfer();
+            dt.items.add(file);
+            fileInput.files = dt.files;
+        } catch (err) {}
+        fileInput.dispatchEvent(new Event("change"));
+    }
+});
+
+/** Charge la séquence sur le serveur puis applique le mode demandé */
+async function loadFileAndSetMode(targetMode) {
+    if (!_parsedFileData) { alert("Aucun fichier chargé."); return; }
+    try {
+        stopAutoplay();
+        onlineMode = false;
+        onlineRoomId = null;
+        onlinePlayerToken = null;
+        onlineColor = null;
+        stopOnlinePolling();
+        lastConsoleSignature = null;
+        lastFinishedSignature = null;
+        clearConsole();
+
+        var sequence = _parsedFileData.sequence;
+        var fileName = (fileInput && fileInput.files && fileInput.files[0]) ? fileInput.files[0].name : "fichier";
+
+        pushConsoleMessage("⏳ Chargement de \"" + fileName + "\"…", "info");
+
+        // La séquence vient du nom de fichier → toujours 1-indexée (chiffres 1-9)
+        // On passe rows/cols null → le serveur utilise la config courante
+        await api("/api/load_sequence", "POST", {
+            sequence: sequence,
+            rows: null,
+            cols: null,
+            starting_color: "R"
+        });
+
+        if (modeEl) modeEl.value = String(targetMode);
+        await api("/api/set", "POST", { mode: targetMode });
+
+        hoveredCol = null;
+        gameStarted = false;
+        updateAiStartsVisibility();
+        updateRobotVisibility();
+        updateDepthVisibility();
+
+        if (fileImportOptions) fileImportOptions.style.display = "none";
+        await refresh();
+
+        var nb = (state && state.cursor) ? state.cursor : 0;
+        pushConsoleMessage("✅ " + nb + " coups rejoués depuis \"" + fileName + "\".", "success");
+        pushConsoleMessage("Appuie sur ▶ Start pour continuer.", "info");
+
+    } catch (e) {
+        alert("Erreur lors du chargement :\n" + e.message);
+    }
+}
+
+// ── Bouton "Charger la partie" → afficher les 3 options de mode ──
+on(btnImportFile, "click", function() {
+    if (!_parsedFileData) return;
+    if (fileImportOptions) {
+        fileImportOptions.style.display = "flex";
+        fileImportOptions.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+});
+
+on(btnFileContinueIAvIA, "click", function() { loadFileAndSetMode(0); }); // IA vs IA
+on(btnFileContinueJvsIA, "click", function() { loadFileAndSetMode(1); }); // Joueur vs IA
+on(btnFileContinueJvsJ, "click", function() { loadFileAndSetMode(2); }); // Joueur vs Joueur
 
 // ============================================================
 // BOOT
