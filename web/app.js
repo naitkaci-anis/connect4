@@ -48,15 +48,18 @@ const robotRGroup = document.getElementById("robotRGroup");
 const robotYGroup = document.getElementById("robotYGroup");
 const depthEl = document.getElementById("depth");
 const depthGroup = document.getElementById("depthGroup");
-const aiStartsEl = document.getElementById("aiStarts");
-const aiStartsGroup = document.getElementById("aiStartsGroup");
+// Couleur IA — remplace l'ancien "IA commence"
+const aiColorEl = document.getElementById("aiColor");
+const aiColorGroup = document.getElementById("aiColorGroup");
+// Alias de compatibilité (pour les fonctions qui utilisent aiStartsEl)
+const aiStartsEl = null; // supprimé — utiliser aiColorEl
 const btnNew = document.getElementById("btnNew");
 const btnStart = document.getElementById("btnStart");
 const btnPause = document.getElementById("btnPause");
 const btnPrev = document.getElementById("btnPrev");
 const btnNext = document.getElementById("btnNext");
 const btnLoadDb = document.getElementById("btnLoadDb");
-const btnSettings = document.getElementById("btnSettings");
+// btnSettings supprimé
 const statusLeft = document.getElementById("statusLeft");
 const robotTxt = document.getElementById("robotTxt");
 const movesTxt = document.getElementById("movesTxt");
@@ -284,13 +287,26 @@ function _renderHint(st) {
 // ============================================================
 // Helpers
 // ============================================================
-function aiStarts() {
-    return aiStartsEl && aiStartsEl.value === "true";
+/**
+ * Retourne true si l'IA joue Rouge (elle commence en premier).
+ * Couleur IA = "R" → ai_starts = true
+ * Couleur IA = "Y" → ai_starts = false (humain commence en rouge)
+ */
+function aiIsRed() {
+    return aiColorEl ? aiColorEl.value === "R" : false;
 }
 
+/** Compatibilité avec l'ancien code qui appelle aiStarts() */
+function aiStarts() { return aiIsRed(); }
+
 function updateAiStartsVisibility() {
-    if (!aiStartsGroup) return;
-    aiStartsGroup.style.display = (modeEl && Number(modeEl.value) === 1) ? "flex" : "none";
+    // Alias pour la compatibilité (loadFileAndSetMode l'appelle)
+    updateAiColorVisibility();
+}
+
+function updateAiColorVisibility() {
+    if (!aiColorGroup) return;
+    aiColorGroup.style.display = (modeEl && Number(modeEl.value) === 1) ? "flex" : "none";
 }
 
 function updateRobotVisibility() {
@@ -303,6 +319,8 @@ function updateRobotVisibility() {
 
 function updateDepthVisibility() {
     if (!depthGroup) return;
+    // Visible seulement pour le robot MiniMax
+    // La prédiction a son propre sélecteur indépendant dans son panneau
     const mode = modeEl ? Number(modeEl.value) : 1;
     let needDepth = false;
     if (mode === 0) {
@@ -360,13 +378,18 @@ function startOnlinePolling() {
     stopOnlinePolling();
     if (!onlineMode || !onlineRoomId || !onlinePlayerToken) return;
     onlinePollingHandle = setInterval(async() => {
-        try { await refresh(); } catch (e) { console.error("online polling failed:", e); }
-    }, 1500);
+        if (!onlineMode || !onlineRoomId || !onlinePlayerToken) {
+            stopOnlinePolling();
+            return;
+        }
+        try { await refreshOnline(); } catch (e) { console.warn("online polling (ignoré):", e.message); }
+    }, 1200);
 }
 
 async function joinOnlineMatch() {
     const data = await api("/api/online/join", "POST", {});
     onlineMode = true;
+    gameStarted = true; // En ligne : le jeu démarre dès la connexion
     onlineRoomId = data.room_id;
     onlinePlayerToken = data.player_token;
     onlineColor = data.color || null;
@@ -387,18 +410,25 @@ async function joinOnlineMatch() {
 }
 
 async function refreshOnline() {
-    if (!onlineRoomId || !onlinePlayerToken) throw new Error("Session online incomplète");
-    state = await api(
+    if (!onlineRoomId || !onlinePlayerToken) return;
+    const newState = await api(
         `/api/online/state?room_id=${encodeURIComponent(onlineRoomId)}&player_token=${encodeURIComponent(onlinePlayerToken)}`
     );
+    state = newState;
     if (modeEl) modeEl.value = "3";
     render();
 }
 
 async function playOnlineMove(col) {
-    if (!onlineRoomId || !onlinePlayerToken) throw new Error("Session online incomplète");
-    await api("/api/online/move", "POST", { room_id: onlineRoomId, player_token: onlinePlayerToken, col });
-    await refresh();
+    if (!onlineRoomId || !onlinePlayerToken) return;
+    try {
+        await api("/api/online/move", "POST", { room_id: onlineRoomId, player_token: onlinePlayerToken, col });
+        await refreshOnline();
+    } catch (e) {
+        console.error("online move failed:", e.message);
+        pushConsoleMessage("Erreur coup en ligne : " + e.message, "danger");
+        await refreshOnline().catch(() => {});
+    }
 }
 
 // ============================================================
@@ -480,21 +510,34 @@ function updateOnlineConsoleFromState() {
     if (!onlineMode || !state) return;
     const waiting = state.online && state.online.waiting;
     const total = state.total || 0;
-    if (waiting) { pushConsoleMessageOnce(`waiting|${onlineRoomId}|${total}`, "En attente d'un adversaire...", "warn"); return; }
-    if (total === 0) pushConsoleMessageOnce(`start|${onlineRoomId}`, "Adversaire trouvé. La partie commence.", "success");
-    if (state.finished) {
-        if (state.draw)
-            pushConsoleMessageOnce(`finish|draw|${state.total}`, "La partie est terminée : égalité.", "warn");
-        else if (state.winner === onlineColor)
-            pushConsoleMessageOnce(`finish|win|${state.total}`, "Bravo, tu as gagné la partie.", "success");
-        else
-            pushConsoleMessageOnce(`finish|lose|${state.total}`, "La partie est terminée. Tu as perdu.", "danger");
+    const room = onlineRoomId || "?";
+
+    // En attente d'un 2e joueur
+    if (waiting) {
+        pushConsoleMessageOnce(`waiting|${room}`, "⏳ En attente d'un adversaire...", "warn");
         return;
     }
+
+    // Annoncer la connexion UNE seule fois (indépendant du nb de coups)
+    pushConsoleMessageOnce(`found|${room}`, "✅ Adversaire trouvé — partie lancée !", "success");
+
+    // Fin de partie
+    if (state.finished) {
+        if (state.draw)
+            pushConsoleMessageOnce(`end|draw|${room}`, "🤝 Égalité !", "warn");
+        else if (state.winner === onlineColor)
+            pushConsoleMessageOnce(`end|win|${room}`, "🎉 Bravo, tu as gagné !", "success");
+        else
+            pushConsoleMessageOnce(`end|lose|${room}`, "Tu as perdu. Bonne chance la prochaine fois.", "danger");
+        stopOnlinePolling();
+        return;
+    }
+
+    // Tour — change à chaque coup (basé sur total)
     if (state.current_turn === onlineColor)
-        pushConsoleMessageOnce(`turn|mine|${state.total}|${state.current_turn}`, "C'est à toi de jouer.", "success");
+        pushConsoleMessageOnce(`mine|${room}|${total}`, "🟢 C'est à toi de jouer !", "success");
     else
-        pushConsoleMessageOnce(`turn|other|${state.total}|${state.current_turn}`, "Tour de l'adversaire...", "info");
+        pushConsoleMessageOnce(`opp|${room}|${total}`, "⏳ Tour de l'adversaire...", "info");
 }
 
 function renderWinnerModal() {
@@ -606,10 +649,11 @@ async function refresh() {
                 robotYEl.value = ra === "neural" ? "neural" : ra === "minimax" ? "minimax" : "random";
             }
             if (depthEl) depthEl.value = String(state.robot_depth);
-            if (aiStartsEl && state.ai_starts !== undefined)
-                aiStartsEl.value = state.ai_starts ? "true" : "false";
+            // Synchroniser la couleur IA depuis l'état serveur
+            if (aiColorEl && state.ai_starts !== undefined)
+                aiColorEl.value = state.ai_starts ? "R" : "Y";
 
-            updateAiStartsVisibility();
+            updateAiColorVisibility();
             updateRobotVisibility();
             updateDepthVisibility();
             render();
@@ -626,8 +670,8 @@ async function refresh() {
 // ============================================================
 async function onColClick(col) {
     try {
+        if (onlineMode) { await playOnlineMove(col); return; } // online: pas besoin de gameStarted
         if (!gameStarted) return;
-        if (onlineMode) { await playOnlineMove(col); return; }
         if (!state || state.finished || state.paused) return;
         if (moveInFlight) return;
 
@@ -769,7 +813,11 @@ on(btnNew, "click", async() => {
 });
 
 on(btnStart, "click", async() => {
-    if (onlineMode) return;
+    if (onlineMode) {
+        // En ligne : Start relance le polling si besoin
+        if (onlineRoomId && onlinePlayerToken) startOnlinePolling();
+        return;
+    }
     gameStarted = true;
     clearConsole();
     pushConsoleMessage("Partie lancée !", "success");
@@ -802,7 +850,7 @@ on(btnNext, "click", async() => {
 // Changement de mode
 on(modeEl, "change", async() => {
     const mode = Number(modeEl.value);
-    updateAiStartsVisibility();
+    updateAiColorVisibility();
     updateRobotVisibility();
     updateDepthVisibility();
 
@@ -811,7 +859,8 @@ on(modeEl, "change", async() => {
         try { await joinOnlineMatch(); } catch (e) {
             onlineMode = false;
             stopOnlinePolling();
-            alert("Impossible de lancer le mode en ligne.\n" + e.message);
+            pushConsoleMessage("Impossible de lancer le mode en ligne : " + e.message, "danger");
+            if (modeEl) modeEl.value = "1";
             await refresh();
         }
         return;
@@ -830,15 +879,25 @@ on(modeEl, "change", async() => {
     await maybeAutoplay();
 });
 
-// IA commence change
-on(aiStartsEl, "change", async() => {
+// Couleur IA change (remplace "IA commence")
+on(aiColorEl, "change", async() => {
     if (onlineMode) return;
     stopAutoplay();
     lastFinishedSignature = null;
-    const val = aiStartsEl ? aiStartsEl.value === "true" : false;
-    await api("/api/set", "POST", { ai_starts: val });
+    _lastHintCursor = -2;
+    _hintData = null;
+    // Rouge = IA commence (ai_starts:true), Jaune = IA joue 2e (ai_starts:false)
+    const isRed = aiColorEl.value === "R";
+    await api("/api/set", "POST", { ai_starts: isRed });
     await api("/api/new", "POST");
     hoveredCol = null;
+    clearConsole();
+    pushConsoleMessage(
+        isRed ?
+        "IA joue 🔴 Rouge — elle commence en premier." :
+        "IA joue 🟡 Jaune — tu commences en premier (Rouge).",
+        "info"
+    );
     await refresh();
     await maybeAutoplay();
 });
@@ -884,50 +943,148 @@ on(depthEl, "change", async() => {
 
 
 // Parties précédentes (DB)
+// ── HISTORY MODAL ─────────────────────────────────────────
+let _allGames = [];
+
+// ── helpers récupérés à chaque appel (jamais null) ──────────
+function _hEl(id) { return document.getElementById(id); }
+
+function _statusBadge(status) {
+    const s = (status || "").toLowerCase();
+    if (s.includes("win") || s.includes("gagn") || s === "finished")
+        return `<span class="history-status-badge win">${status}</span>`;
+    if (s.includes("draw") || s.includes("egal") || s === "draw")
+        return `<span class="history-status-badge draw">${status}</span>`;
+    if (s === "in_progress" || s === "en cours" || s === "live")
+        return `<span class="history-status-badge live">En cours</span>`;
+    return `<span class="history-status-badge">${status || "?"}</span>`;
+}
+
+function _renderHistoryList(games) {
+    const listEl = _hEl("historyList");
+    const countEl = _hEl("historyCount");
+    if (!listEl) return;
+    if (!games.length) {
+        listEl.innerHTML = '<div class="history-empty">Aucune partie trouvée.</div>';
+        if (countEl) countEl.textContent = "";
+        return;
+    }
+    if (countEl) countEl.textContent = `${games.length} partie(s)`;
+    listEl.innerHTML = games.map(g => {
+                const seq = (g.original_sequence || "").slice(0, 45);
+                const src = g.source_filename || "";
+                const rows = g.rows || 9,
+                    cols = g.cols || 9;
+                const nbMoves = seq ? seq.split(",").filter(Boolean).length : 0;
+                const winner = g.winner ? (g.winner === "R" ? "🔴 Rouge" : "🟡 Jaune") : (g.draw ? "🤝 Égalité" : "");
+                return `<div class="history-item">
+            <div class="history-item-id">${g.id}<span>ID</span></div>
+            <div class="history-item-main">
+                <div class="history-item-top">
+                    <span class="history-item-title">Partie #${g.id}</span>
+                    ${_statusBadge(g.status)}
+                    ${winner ? `<span style="font-size:12px;color:#b8c7ee;">${winner}</span>` : ""}
+                </div>
+                <div class="history-item-meta">
+                    <span>📐 ${rows}×${cols}</span>
+                    ${nbMoves ? `<span>🎯 ${nbMoves} coups</span>` : ""}
+                    ${src ? `<span>📂 ${src.slice(0, 20)}</span>` : ""}
+                </div>
+                ${seq ? `<div class="history-item-seq">${seq}${(g.original_sequence||"").length > 45 ? "…" : ""}</div>` : ""}
+            </div>
+            <button class="history-load-btn" onclick="_loadGame(${g.id}, this)">▶ Charger</button>
+        </div>`;
+    }).join("");
+}
+
+async function _loadGame(gid, btn) {
+    const modal = _hEl("historyModal");
+    if (btn) { btn.disabled = true; btn.textContent = "\u23f3\u2026"; }
+    try {
+        stopAutoplay();
+        onlineMode = false; onlineRoomId = null; onlinePlayerToken = null; onlineColor = null;
+        stopOnlinePolling(); lastConsoleSignature = null;
+        lastFinishedSignature = null;  // reset avant refresh
+        clearConsole();
+        await api(`/api/db/load/${gid}`, "POST");
+        if (modal) modal.style.display = "none";   // fermer la modal
+        await refresh();
+        // Partie terminee : bloquer la popup winner mais garder les pions eclaires
+        if (state && state.finished) {
+            lastFinishedSignature = `${state.game_index}|${state.winner}|${state.draw}|${state.total}`;
+            if (winnerModal) removeClass(winnerModal, "show");
+        }
+        const nb = state && state.total ? state.total + " coups" : "";
+        pushConsoleMessage(`Partie #${gid} chargee (${nb}).`, "success");
+    } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = "\u25b6 Charger"; }
+        pushConsoleMessage("Erreur chargement : " + e.message, "danger");
+    }
+}
+
+function _openHistoryModal() {
+    const modal   = _hEl("historyModal");
+    const listEl  = _hEl("historyList");
+    const searchEl= _hEl("historySearch");
+    if (!modal) { console.warn("historyModal not found in DOM"); return false; }
+    if (listEl)  listEl.innerHTML  = '<div class="history-empty">⏳ Chargement…</div>';
+    if (searchEl) searchEl.value   = "";
+    // style.display direct — écrase le display:none inline du HTML
+    modal.style.display = "flex";
+    return true;
+}
+
+function _closeHistoryModal() {
+    const modal = _hEl("historyModal");
+    if (modal) modal.style.display = "none";
+}
+
+// ── Wiring — appliqué après DOMContentLoaded si nécessaire ──
+function _wireHistoryModal() {
+    const closeBtn = _hEl("btnCloseHistory");
+    const modal    = _hEl("historyModal");
+    const searchEl = _hEl("historySearch");
+    if (closeBtn && !closeBtn._wired) {
+        closeBtn.addEventListener("click", _closeHistoryModal);
+        closeBtn._wired = true;
+    }
+    if (modal && !modal._wiredBg) {
+        modal.addEventListener("click", (e) => { if (e.target === modal) _closeHistoryModal(); });
+        modal._wiredBg = true;
+    }
+    if (searchEl && !searchEl._wired) {
+        searchEl.addEventListener("input", () => {
+            const q = (searchEl.value || "").toLowerCase().trim();
+            _renderHistoryList(q ? _allGames.filter(g =>
+                String(g.id).includes(q) ||
+                (g.status || "").toLowerCase().includes(q) ||
+                (g.original_sequence || "").toLowerCase().includes(q) ||
+                (g.source_filename || "").toLowerCase().includes(q)
+            ) : _allGames);
+        });
+        searchEl._wired = true;
+    }
+}
+_wireHistoryModal();
+
+// ── Bouton "Parties précédentes" ────────────────────────────
 on(btnLoadDb, "click", async() => {
+    _wireHistoryModal();   // re-wire au cas où le DOM n'était pas prêt
+    if (!_openHistoryModal()) return;
     try {
         const data = await api("/api/db/list");
-        const games = data.games || [];
-        if (!games.length) { alert("Aucune partie enregistrée."); return; }
-        const last = games.slice(0, 15).map(g =>
-            `#${g.id} | ${g.status} | seq=${(g.original_sequence || "").slice(0, 25)} | src=${g.source_filename || ""}`
-        ).join("\n");
-        const idStr = prompt("Choisis l'ID d'une partie à charger.\n\nDernières parties:\n" + last);
-        if (!idStr) return;
-        const gid = Number(idStr);
-        if (!Number.isFinite(gid)) return;
-        stopAutoplay();
-        onlineMode = false;
-        onlineRoomId = null;
-        onlinePlayerToken = null;
-        onlineColor = null;
-        stopOnlinePolling();
-        lastConsoleSignature = null;
-        lastFinishedSignature = null;
-        clearConsole();
-        pushConsoleMessage(`Chargement de la partie #${gid}...`, "info");
-        await api(`/api/db/load/${gid}`, "POST");
-        await refresh();
-        await maybeAutoplay();
-    } catch (e) { alert("DB non disponible / erreur.\n" + e.message); }
+        _allGames  = (data.games || []).sort((a, b) => b.id - a.id);
+        _renderHistoryList(_allGames);
+    } catch (e) {
+        const listEl = _hEl("historyList");
+        if (listEl) listEl.innerHTML =
+            `<div class="history-empty" style="color:#ff7070;">
+               ⚠️ ${e.message}<br><small>Vérifie que la DB est disponible.</small>
+             </div>`;
+    }
 });
 
-// Paramètres
-on(btnSettings, "click", async() => {
-    if (onlineMode) return;
-    stopAutoplay();
-    const cfg = await api("/api/config");
-    const rows = Number(prompt("rows (4..30)", cfg.rows));
-    const cols = Number(prompt("cols (4..30)", cfg.cols));
-    const starting_color = prompt("starting_color (R ou Y)", cfg.starting_color) || cfg.starting_color;
-    const cell_size = Number(prompt("cell_size (30..120)", cfg.cell_size));
-    const margin = Number(prompt("margin (5..50)", cfg.margin));
-    const drop_delay_ms = Number(prompt("drop_delay_ms (0..2000)", cfg.drop_delay_ms));
-    await api("/api/config", "POST", { rows, cols, starting_color, cell_size, margin, drop_delay_ms });
-    await api("/api/new", "POST");
-    await refresh();
-    await maybeAutoplay();
-});
+// Bouton Paramètres supprimé
 
 // Modales winner
 on(btnCloseWinner, "click", () => { removeClass(winnerModal, "show"); });
@@ -958,27 +1115,26 @@ const predictDetail = document.getElementById("predictDetail");
 const predictFill = document.getElementById("predictFill");
 const predictPct = document.getElementById("predictPct");
 
+// ── Prédiction — clic sur 🔮 Prédire ───────────────────────
 on(btnPredict, "click", async() => {
     if (!predictPanel) return;
     predictPanel.style.display = "block";
     if (predictLoading) predictLoading.style.display = "flex";
-    if (predictResult) predictResult.style.display = "none";
+    if (predictResult)  predictResult.style.display  = "none";
 
     try {
         const data = await api("/api/predict");
 
         if (predictLoading) predictLoading.style.display = "none";
-        if (predictResult) predictResult.style.display = "block";
+        if (predictResult)  predictResult.style.display  = "block";
 
-        const isR = data.winner === "R";
-        const isY = data.winner === "Y";
-        const isDraw = data.winner === "draw";
-        const isUnknown = data.winner === "unknown" || !data.winner;
-        const colorName = isR ? "Rouge 🔴" : isY ? "Jaune 🟡" : null;
-        const certain = !!data.certain;
-        const ml = data.moves_left; // -1 si pas prouvé
-        const threat = data.threat || null;
-        const bestCol = (data.best_col !== null && data.best_col !== undefined) ? data.best_col + 1 : null;
+        const isR      = data.winner === "R";
+        const isY      = data.winner === "Y";
+        const isDraw   = data.winner === "draw";
+        const colorName= isR ? "Rouge 🔴" : isY ? "Jaune 🟡" : null;
+        const certain  = !!data.certain;
+        const ml       = data.moves_left;
+        const threat   = data.threat || null;
 
         // ── Titre ──────────────────────────────────────────────
         if (colorName && certain) {
@@ -988,63 +1144,88 @@ on(btnPredict, "click", async() => {
             predictWinner.textContent = colorName + " en avantage";
             predictWinner.style.color = isR ? "#ff9966" : "#ffe49a";
         } else if (isDraw) {
-            predictWinner.textContent = "🤝 Égalité";
+            predictWinner.textContent = "🤝 Égalité probable";
             predictWinner.style.color = "#b8c7ee";
         } else {
             predictWinner.textContent = "🔮 Position équilibrée";
             predictWinner.style.color = "#b8c7ee";
         }
 
-        // ── Détail ─────────────────────────────────────────────
-        let lines = [];
+        // ── Variables utiles ────────────────────────────────────
+        const bestCol     = (data.best_col != null) ? data.best_col + 1 : null;
+        const currentMove = data.current_move || "?";
+        const turns       = ml > 0 ? Math.max(1, Math.ceil(ml / 2)) : null;
+        const winColor    = isR ? "#ff7070" : "#ffe46b";
 
-        // Double menace
-        if (threat === "double") {
-            lines.push(`⚠️ <strong>Double menace détectée</strong> — défaite inévitable.`);
-        } else if (threat === "single") {
-            lines.push(`⚠️ Menace à bloquer immédiatement.`);
+        // ── Clé de la victoire — SEULEMENT si victoire prouvée (certain) ──
+        let keyHtml = "";
+        if (bestCol && certain && ml > 0 && !data.finished) {
+            keyHtml = `
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;
+                        padding:10px 14px;border-radius:11px;
+                        background:rgba(255,255,255,.05);
+                        border:1px solid rgba(255,255,255,.10);">
+                <div style="text-align:center;min-width:50px;flex-shrink:0;">
+                    <div style="font-size:28px;font-weight:900;color:${winColor};line-height:1;">${bestCol}</div>
+                    <div style="font-size:9px;font-weight:800;letter-spacing:.8px;color:#7a92c0;margin-top:2px;">COLONNE</div>
+                </div>
+                <div style="border-left:1px solid rgba(255,255,255,.08);padding-left:12px;flex:1;">
+                    <div style="font-size:10px;font-weight:800;letter-spacing:.8px;color:#7a92c0;">🔑 CLÉ DE LA VICTOIRE</div>
+                    <div style="font-size:13px;font-weight:800;color:${winColor};margin-top:3px;">
+                        Jouer col&nbsp;${bestCol} maintenant
+                    </div>
+                    <div style="font-size:12px;color:#b8c7ee;margin-top:2px;">
+                        ${certain ? `Victoire en <strong>${ml}</strong> coup(s) — ${turns} tour(s)` :
+                                    `Victoire estimée ~<strong>${ml}</strong> coup(s) — ~${turns} tour(s)`}
+                    </div>
+                </div>
+            </div>`;
         }
 
-        // Résultat principal
+        // ── Lignes de détail ─────────────────────────────────────
+        let lines = [];
+        if (threat === "fork") {
+            lines.push(`🔱 <strong>Fork</strong> — 2 menaces créées, victoire forcée en 3 coups.`);
+        } else if (threat === "double") {
+            lines.push(`💀 <strong>Double menace</strong> — défaite inévitable en 2 coups.`);
+        } else if (threat === "single") {
+            lines.push(`⚡ Menace à bloquer immédiatement.`);
+        }
         if (data.finished) {
             lines.push("La partie est terminée.");
         } else if (certain && ml > 0) {
-            // ✅ Suite PROUVÉE — on affiche le vrai nombre
-            const turns = Math.max(1, Math.ceil(ml / 2));
-            lines.push(`✅ <strong>Suite prouvée</strong> : ${COLOR_NAME_JS(data.winner)} gagne en <strong>${ml} coup(s)</strong> (~${turns} tour(s)).`);
+            lines.push(`✅ <strong>Suite prouvée</strong> — ${COLOR_NAME_JS(data.winner)} gagne en <strong>${ml} coup(s)</strong> (~${turns} tour(s)).`);
+        } else if (!certain && colorName && ml > 0) {
+            lines.push(`📊 Victoire estimée ~<strong>${ml} coup(s)</strong> (~${turns} tour(s)).`);
         } else if (!certain && colorName) {
-            // Avantage heuristique — PAS de nombre de coups, PAS de colonne suggérée
-            lines.push(`📊 Avantage ${colorName.split(" ")[0]} détecté.`);
-            lines.push(`Aucune victoire forcée dans la profondeur analysée.`);
+            lines.push(`📊 Avantage ${colorName.split(" ")[0]} positionnel.`);
         } else if (isDraw) {
-            lines.push("Aucun avantage décisif détecté pour l'un ou l'autre.");
+            lines.push("Position équilibrée — aucun avantage décisif.");
         } else {
             lines.push(data.explanation || "Position équilibrée.");
         }
 
-        predictDetail.innerHTML = lines.join("<br>");
+        if (predictDetail) predictDetail.innerHTML = keyHtml + lines.join("<br>");
 
         // ── Barre d'avantage ───────────────────────────────────
-        // Utilise score_pct (0-100 côté Rouge) fourni par le serveur
         let pct = data.score_pct !== undefined ? data.score_pct : 50;
         pct = Math.max(5, Math.min(95, pct));
 
         if (predictFill) {
             predictFill.style.width = pct + "%";
-            predictFill.style.background = pct > 55 ?
-                "linear-gradient(90deg,#e53935,#b21a1a)" :
+            predictFill.style.background =
+                pct > 55 ? "linear-gradient(90deg,#e53935,#b21a1a)" :
                 pct < 45 ? "linear-gradient(90deg,#b58a00,#ffe46b)" :
-                "linear-gradient(90deg,#378ADD,#1a4fa0)";
+                           "linear-gradient(90deg,#378ADD,#1a4fa0)";
         }
-        const rPct = pct,
-            yPct = 100 - pct;
         if (predictPct) predictPct.textContent =
-            pct > 55 ? `Rouge ${rPct}%` :
-            pct < 45 ? `Jaune ${yPct}%` : `Équilibré 50/50`;
+            pct > 55 ? `Rouge ${pct}%` :
+            pct < 45 ? `Jaune ${100 - pct}%` :
+                       `Équilibré 50/50`;
 
     } catch (e) {
         if (predictLoading) predictLoading.style.display = "none";
-        if (predictResult) predictResult.style.display = "block";
+        if (predictResult)  predictResult.style.display  = "block";
         if (predictWinner) {
             predictWinner.textContent = "⚠️ Erreur";
             predictWinner.style.color = "#ff6b6b";
@@ -1052,7 +1233,6 @@ on(btnPredict, "click", async() => {
         if (predictDetail) predictDetail.innerHTML = e.message || "Erreur inconnue.";
     }
 });
-
 function COLOR_NAME_JS(c) { return c === "R" ? "Rouge 🔴" : "Jaune 🟡"; }
 
 on(btnClosePrediction, "click", () => {
@@ -1258,18 +1438,20 @@ async function loadFileAndSetMode(targetMode) {
     }
 }
 
-// ── Bouton "Charger la partie" → afficher les 3 options de mode ──
+// ── Bouton "Charger la partie" → charge immédiatement avec le mode actuel ──
 on(btnImportFile, "click", function() {
-    if (!_parsedFileData) return;
-    if (fileImportOptions) {
-        fileImportOptions.style.display = "flex";
-        fileImportOptions.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
+    if (!_parsedFileData) { pushConsoleMessage("Aucun fichier sélectionné.", "warn"); return; }
+    // Utiliser le mode actuellement sélectionné dans la toolbar
+    var currentMode = modeEl ? Number(modeEl.value) : 2;
+    // Si mode En ligne, charger en Joueur vs Joueur par défaut
+    if (currentMode === 3) currentMode = 2;
+    loadFileAndSetMode(currentMode);
 });
 
-on(btnFileContinueIAvIA, "click", function() { loadFileAndSetMode(0); }); // IA vs IA
-on(btnFileContinueJvsIA, "click", function() { loadFileAndSetMode(1); }); // Joueur vs IA
-on(btnFileContinueJvsJ, "click", function() { loadFileAndSetMode(2); }); // Joueur vs Joueur
+// Garder les anciens boutons actifs au cas où fileImportOptions est affiché
+on(btnFileContinueIAvIA, "click", function() { loadFileAndSetMode(0); });
+on(btnFileContinueJvsIA, "click", function() { loadFileAndSetMode(1); });
+on(btnFileContinueJvsJ,  "click", function() { loadFileAndSetMode(2); });
 
 // ============================================================
 // BOOT
@@ -1278,7 +1460,7 @@ if (onlineConsoleEl) {
     clearConsole();
     pushConsoleMessage("Bienvenue sur Puissance 4.", "info");
 }
-updateAiStartsVisibility();
+updateAiColorVisibility();
 updateRobotVisibility();
 updateDepthVisibility();
 refresh(); // pas de maybeAutoplay au boot — attendre ▶ Start
