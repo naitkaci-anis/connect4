@@ -4,7 +4,9 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Connect4 Web</title>
+    <title>Puissance 4</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;600;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css" />
     <style>
         /* ── AI thinking bar ── */
@@ -155,25 +157,76 @@
             font-size: 13px;
             color: #555;
         }
-        /* ── IA commence — masqué sauf mode 1 ── */
+        /* ── Couleur IA — visible seulement mode 1 ── */
         
-        #aiStartsGroup {
+        #aiColorGroup {
             display: none;
+        }
+        /* ── Logo brand ── */
+        
+        .logo-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .logo-discs {
+            display: flex;
+            gap: 3px;
+            align-items: center;
+        }
+        
+        .logo-disc {
+            display: block;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+        }
+        
+        .logo-disc.r {
+            background: radial-gradient(circle at 35% 30%, #ff6b6b, #b21a1a);
+            box-shadow: 0 2px 8px rgba(229, 57, 53, 0.5);
+        }
+        
+        .logo-disc.y {
+            background: radial-gradient(circle at 35% 30%, #ffe46b, #b58a00);
+            box-shadow: 0 2px 8px rgba(253, 216, 53, 0.4);
+        }
+        
+        .brand-title {
+            margin: 0;
+            font-family: 'Bebas Neue', 'DM Sans', system-ui, sans-serif;
+            font-size: 34px;
+            font-weight: 400;
+            letter-spacing: 2px;
+            line-height: 1;
+            background: linear-gradient(135deg, #ffffff 0%, #c0d8ff 50%, #7faaff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .brand-title .logo-num {
+            background: linear-gradient(135deg, #ff7070, #e53935);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
         /* ── Bouton Start ── */
         
         .btn-start {
-            background: linear-gradient(180deg, #e53935, #b71c1c) !important;
-            font-size: 15px;
-            font-weight: 900;
-            letter-spacing: 1px;
-            box-shadow: 0 4px 18px rgba(229, 57, 53, 0.45);
+            background: linear-gradient(135deg, #e53935, #b71c1c) !important;
+            font-size: 14px !important;
+            font-weight: 900 !important;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 18px rgba(229, 57, 53, 0.45) !important;
             border: 1px solid rgba(255, 100, 100, 0.30) !important;
         }
         
         .btn-start:hover {
-            filter: brightness(1.12);
-            box-shadow: 0 6px 24px rgba(229, 57, 53, 0.65);
+            filter: brightness(1.15) !important;
+            box-shadow: 0 8px 28px rgba(229, 57, 53, 0.65) !important;
+            transform: translateY(-2px) scale(1.03) !important;
         }
         /* ══════════════════════════════════════════
            EFFETS PLATEAU — dernier coup + victoire
@@ -294,8 +347,18 @@
         <!-- TOP BAR -->
         <header class="topbar">
             <div class="brand">
-                <h1>Puissance 4</h1>
-                <p class="subtitle">By ANIS NAIT KACI</p>
+                <div class="logo-wrap">
+                    <div class="logo-discs">
+                        <span class="logo-disc r"></span>
+                        <span class="logo-disc y"></span>
+                        <span class="logo-disc r"></span>
+                        <span class="logo-disc y"></span>
+                    </div>
+                    <div>
+                        <h1 class="brand-title">Puissance<span class="logo-num"> 4</span></h1>
+                        <p class="subtitle">By ANIS NAIT KACI</p>
+                    </div>
+                </div>
             </div>
 
             <div class="toolbar">
@@ -311,12 +374,12 @@
                     </select>
                 </div>
 
-                <!-- IA commence (visible seulement mode 1) -->
-                <div class="control-group" id="aiStartsGroup">
-                    <label for="aiStarts">IA commence</label>
-                    <select id="aiStarts">
-                        <option value="false">Non — Je suis Rouge</option>
-                        <option value="true">Oui — IA est Rouge</option>
+                <!-- Couleur IA (visible seulement mode 1) -->
+                <div class="control-group" id="aiColorGroup">
+                    <label for="aiColor">Couleur IA</label>
+                    <select id="aiColor">
+                        <option value="R">🔴 Rouge commence</option>
+                        <option value="Y">🟡 Jaune commence</option>
                     </select>
                 </div>
 
@@ -350,9 +413,9 @@
                     </select>
                 </div>
 
-                <!-- Profondeur -->
+                <!-- Profondeur — aussi utilisée pour la prédiction -->
                 <div class="control-group" id="depthGroup">
-                    <label for="depth">Profondeur</label>
+                    <label for="depth">Profondeur MiniMax</label>
                     <select id="depth">
                         <option value="1">1</option>
                         <option value="2">2</option>
@@ -374,7 +437,6 @@
                     <button id="btnPaint" class="btn">✏️ Peindre</button>
                     <button id="btnPredict" class="btn">🔮 Prédire</button>
                     <button id="btnLoadDb" class="btn">Parties précédentes</button>
-                    <button id="btnSettings" class="btn">Paramètres</button>
                 </div>
             </div>
         </header>
@@ -553,8 +615,8 @@
     </div>
 
     <!-- PREDICTION PANEL (flottant bas-droite) -->
-    <div id="predictPanel" style="display:none; position:fixed; bottom:24px; right:24px; z-index:1000;
-         width:340px; background:rgba(8,18,40,0.97); border:1px solid rgba(255,255,255,0.12);
+    <div id="predictPanel" style="display:none; position:fixed; bottom:20px; left:20px; z-index:1000;
+         width:360px; background:rgba(8,18,40,0.97); border:1px solid rgba(255,255,255,0.12);
          border-radius:16px; padding:18px 20px; box-shadow:0 20px 60px rgba(0,0,0,0.55);
          backdrop-filter:blur(12px);">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
@@ -579,11 +641,10 @@
                          color:#b8c7ee;margin-bottom:5px;">
                         <span>🔴 Rouge</span><span>🟡 Jaune</span>
                     </div>
-                    <div style="height:8px;border-radius:999px;background:rgba(255,255,255,0.10);
-                         overflow:hidden;">
+                    <div style="height:8px;border-radius:999px;background:rgba(255,255,255,0.10);overflow:hidden;">
                         <div id="predictFill" style="height:100%;border-radius:999px;
-                                    background:linear-gradient(90deg,#e53935,#b21a1a);
-                                    transition:width 0.6s ease;width:50%;"></div>
+                             background:linear-gradient(90deg,#e53935,#b21a1a);
+                             transition:width 0.6s ease;width:50%;"></div>
                     </div>
                     <div style="text-align:center;font-size:11px;color:#b8c7ee;margin-top:5px;">
                         <span id="predictPct"></span>
@@ -592,7 +653,6 @@
             </div>
         </div>
     </div>
-
     <!-- PAINT MODAL -->
     <div id="paintModal" class="modal">
         <div class="modal-card paint-card">
@@ -634,6 +694,28 @@
     </div>
 
     <script src="app.js"></script>
+
+    <!-- HISTORY MODAL — Parties précédentes -->
+    <div id="historyModal" style="display:none;">
+        <div class="history-card-modal">
+            <!-- En-tête -->
+            <div class="history-header">
+                <h2>📁 PARTIES PRÉCÉDENTES</h2>
+                <button id="btnCloseHistory" class="history-header-close">✕ Fermer</button>
+            </div>
+            <!-- Barre de recherche -->
+            <div class="history-search">
+                <input type="text" id="historySearch" placeholder="🔍 Rechercher par ID, statut, séquence…" />
+            </div>
+            <!-- Compteur -->
+            <div class="history-count" id="historyCount"></div>
+            <!-- Liste -->
+            <div class="history-list-wrap">
+                <div id="historyList"></div>
+            </div>
+        </div>
+    </div>
+
 </body>
 
 </html>
